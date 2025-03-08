@@ -1,11 +1,6 @@
 openai
+semantic-kernel #1.23.1
 ipykernel
 python-dotenv
-pydantic
-websockets 
-asyncio
-nest_asyncio
-numpy
-IPython
-pyaudio
-sounddevice
+
+
