@@ -71,7 +71,7 @@ class LLMHandler:
         """Check if the full model service is available"""
         return self.full_model_service is not None
     
-    async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> str:
+    async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
         Execute a direct prompt to the LLM
         
@@ -81,16 +81,22 @@ class LLMHandler:
             temperature: The temperature setting for generation
             
         Returns:
-            The LLM response as a string
+            Dictionary containing the response text and model info
         """
         # Select the appropriate service
         service = self.full_model_service if use_full_model and self.is_full_model_available() else self.chat_service
         
         if not service:
-            return "LLM service not available."
+            return {
+                "text": "LLM service not available.",
+                "model": "None",
+                "deployment": "None"
+            }
             
         try:
             model_type = "full" if use_full_model else "mini"
+            deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o") if use_full_model else os.getenv("AZURE_OPENAI_MINI_DEPLOYMENT_NAME", "gpt-4o-mini")
+            
             logger.info(f"Direct LLM prompt ({model_type}): {prompt[:100]}...")
             
             # Set temperature
@@ -110,13 +116,21 @@ class LLMHandler:
             response_text = str(result)
             logger.info(f"Direct LLM response ({model_type}): {response_text[:100]}...")
             
-            return response_text
+            return {
+                "text": response_text,
+                "model": model_type,
+                "deployment": deployment_name
+            }
             
         except Exception as e:
             logger.error(f"Error in direct LLM prompt: {str(e)}")
-            return f"Error in LLM processing: {str(e)}"
+            return {
+                "text": f"Error in LLM processing: {str(e)}",
+                "model": "error",
+                "deployment": "none"
+            }
     
-    async def calculate_diagnosis_confidence(self, symptoms: str) -> Tuple[float, str]:
+    async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
         Calculate confidence in diagnosis through self-reflection
         
@@ -124,10 +138,15 @@ class LLMHandler:
             symptoms: String containing all symptoms
             
         Returns:
-            Tuple of (confidence_score, reasoning)
+            Dictionary with confidence score, reasoning, and model info
         """
         if not self.is_available() or not symptoms or symptoms == "unknown symptoms":
-            return 0.0, "Insufficient information"
+            return {
+                "confidence": 0.0,
+                "reasoning": "Insufficient information",
+                "model": "none",
+                "deployment": "none"
+            }
         
         try:
             # Create a prompt for self-reflection
@@ -152,7 +171,8 @@ Return ONLY a JSON object with this format:
 }}"""
 
             # Use full model for confidence calculation if available
-            response_text = await self.execute_prompt(prompt, use_full_model=True, temperature=0.3)
+            response_data = await self.execute_prompt(prompt, use_full_model=True, temperature=0.3)
+            response_text = response_data.get("text", "")
             
             # Try to find a JSON object in the response
             match = re.search(r'\{.*\}', response_text, re.DOTALL)
@@ -166,7 +186,14 @@ Return ONLY a JSON object with this format:
                     confidence = max(0.0, min(confidence, 1.0))
                     
                     logger.info(f"Diagnosis confidence: {confidence:.2f} - {reasoning}")
-                    return confidence, reasoning
+                    
+                    # Return confidence with model info
+                    return {
+                        "confidence": confidence,
+                        "reasoning": reasoning,
+                        "model": response_data.get("model", "unknown"),
+                        "deployment": response_data.get("deployment", "unknown")
+                    }
                     
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"Error parsing confidence result: {str(e)}")
@@ -177,8 +204,19 @@ Return ONLY a JSON object with this format:
             fallback_reasoning = "Based on the number of symptoms provided"
             
             logger.warning(f"Using fallback confidence: {fallback_confidence:.2f}")
-            return fallback_confidence, fallback_reasoning
+            
+            return {
+                "confidence": fallback_confidence,
+                "reasoning": fallback_reasoning,
+                "model": response_data.get("model", "unknown"),
+                "deployment": response_data.get("deployment", "unknown")
+            }
             
         except Exception as e:
             logger.error(f"Error in confidence calculation: {str(e)}")
-            return 0.2, f"Error: {str(e)}"
+            return {
+                "confidence": 0.2,
+                "reasoning": f"Error: {str(e)}",
+                "model": "error",
+                "deployment": "none"
+            }
