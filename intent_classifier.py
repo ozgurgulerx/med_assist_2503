@@ -1,5 +1,5 @@
 """
-Intent Classification Service for Medical Assistant
+Pure LLM-based Intent Classification Service for Medical Assistant
 """
 import os
 import re
@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class IntentClassificationService:
-    """Service for classifying user intents using LLM when available, with pattern matching as fallback"""
+    """Pure LLM-based intent classification service with minimal fallbacks"""
     
     def __init__(self, chat_service: AzureChatCompletion = None, kernel: Kernel = None):
         """
@@ -51,22 +51,23 @@ class IntentClassificationService:
             try:
                 self.chat_service = AzureChatCompletion(
                     deployment_name=os.getenv("INTENT_AZURE_OPENAI_DEPLOYMENT_NAME"),
-                    endpoint=os.getenv("INTENT_AZURE_OPENAI_ENDPOINT"),
-                    api_key=os.getenv("INTENT_AZURE_OPENAI_API_KEY"),
+                    endpoint=os.getenv("INTENT_AZURE_OPENAI_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT")),
+                    api_key=os.getenv("INTENT_AZURE_OPENAI_API_KEY", os.getenv("AZURE_OPENAI_API_KEY")),
                     api_version="2024-06-01"
                 )
                 self.kernel.add_service(self.chat_service)
-                logger.info("Created dedicated Azure OpenAI service for intent classification")
+                logger.info("Created Azure OpenAI service for intent classification")
                 self.is_dedicated_service = True
             except Exception as e:
-                logger.error(f"Failed to initialize dedicated Azure OpenAI service for intent classification: {str(e)}")
-                logger.warning("Intent classifier will use pattern matching as fallback")
+                logger.error(f"Failed to initialize Azure OpenAI service for intent classification: {str(e)}")
+                logger.warning("Intent classifier will use minimal fallbacks only")
                 self.chat_service = None
                 self.is_dedicated_service = False
         else:
             self.chat_service = chat_service
             self.is_dedicated_service = False
         
+        # Define intent options - we'll need these regardless
         self.intent_options = [
             "greet",
             "inform_symptoms",
@@ -76,42 +77,10 @@ class IntentClassificationService:
             "goodbye",
             "out_of_scope"
         ]
-        
-        # Enhanced pattern definitions for fallback
-        self.patterns = {
-            "greet": [
-                r"\b(?:hello|hi|hey|greetings|good\s*(?:morning|afternoon|evening))\b"
-            ],
-            "inform_symptoms": [
-                r"\b(?:headache|pain|ache|hurt|sore|dizzy|nausea|vomit|fever|cough|sneeze|rash|swelling|breathing|tired|fatigue|exhausted|symptom|sick|ill|unwell)\b",
-                r"\b(?:feeling|experienc(?:e|ing)|suffer(?:ing)?|having)\b",
-                r"\b(?:since|started|begin|began|worse|better|worsen|improve)\b",
-                r"\b(?:morning|night|day|week|daily|constant|persistent|chronic|acute)\b"
-            ],
-            "ask_medical_info": [
-                r"(?:what|how|why|when|where|which|can|should)\s.+(?:\?|$)",
-                r"\b(?:tell me about|explain|information|advice|recommend|suggest)\b",
-                r"\b(?:treatment|medicine|medication|drug|therapy|doctor|normal|average|typical|blood pressure|cholesterol|diabetes|heart)\b"
-            ],
-            "confirm": [
-                r"\b(?:yes|yeah|yep|correct|right|exactly|agree|true|affirmative)\b"
-            ],
-            "deny": [
-                r"\b(?:no|nope|not|don't|doesn't|didn't|haven't|hasn't|can't|none|never)\b"
-            ],
-            "goodbye": [
-                r"\b(?:bye|goodbye|farewell|thanks|thank you|appreciate|good night)\b"
-            ]
-        }
-        
-        # Compile all patterns
-        self.compiled_patterns = {}
-        for intent, pattern_list in self.patterns.items():
-            self.compiled_patterns[intent] = [re.compile(pattern, re.IGNORECASE) for pattern in pattern_list]
-        
+    
     async def classify_intent_with_llm(self, utterance: str) -> Optional[Dict[str, float]]:
         """
-        Classify intent using LLM with the Semantic Kernel
+        Classify intent using LLM
         
         Args:
             utterance: The user's message
@@ -125,11 +94,11 @@ class IntentClassificationService:
             
         logger.info("Attempting LLM-based intent classification")
         
-        # Create a description of each intent for the LLM
+        # Intent descriptions
         intent_descriptions = {
             "greet": "Greetings and introductions",
-            "inform_symptoms": "Descriptions of symptoms, health issues, or medical conditions",
-            "ask_medical_info": "Questions about medical topics or health information",
+            "inform_symptoms": "Descriptions of ANY physical or mental symptoms, health issues, medical conditions, pain, discomfort, or abnormal sensations. This includes general descriptions of not feeling well or having issues with bodily functions.",
+            "ask_medical_info": "Questions about medical topics, treatments, medications, or health information",
             "confirm": "Affirmative responses (yes, correct, etc.)",
             "deny": "Negative responses (no, incorrect, etc.)",
             "goodbye": "Ending the conversation or expressing thanks",
@@ -139,15 +108,20 @@ class IntentClassificationService:
         # Format the intent options for the prompt
         intent_options_text = "\n".join([f"- {intent}: {desc}" for intent, desc in intent_descriptions.items()])
         
-        prompt = f"""You are classifying the intent of a user message for a medical chatbot.
+        prompt = f"""You are a medical assistant classifying the intent of a user message.
 Given the user message, determine which of the following intents best matches:
 
 {intent_options_text}
 
 User message: "{utterance}"
 
-Important: When a user mentions ANY health issues, symptoms, pain, or physical/mental conditions, classify it as "inform_symptoms".
-If they ask ANY questions about medical information, treatments, or conditions, classify it as "ask_medical_info".
+IMPORTANT MEDICAL CLASSIFICATION RULES:
+1. ANY mention of physical symptoms, pain, illness, or health problems should be classified as "inform_symptoms"
+2. Even VAGUE descriptions like "not feeling well" or "having issues" should be classified as "inform_symptoms"
+3. Follow-up details about previously mentioned symptoms are still "inform_symptoms"
+4. Medical questions are "ask_medical_info", but descriptions of one's own condition are "inform_symptoms"
+5. When in doubt between symptom descriptions and medical questions, prioritize "inform_symptoms"
+6. Responses to direct questions about symptoms should be classified as "inform_symptoms"
 
 Respond with a JSON object in this exact format:
 {{
@@ -168,7 +142,7 @@ Use only the intent names from the list above. The confidence should be between 
             # Configure execution settings
             execution_settings = AzureChatPromptExecutionSettings()
             
-            # Get LLM response using the working method
+            # Get LLM response
             result = await self.chat_service.get_chat_message_content(
                 chat_history=chat_history,
                 settings=execution_settings,
@@ -178,10 +152,10 @@ Use only the intent names from the list above. The confidence should be between 
             response_text = str(result)
             
             if not response_text:
-                logger.warning("Empty response from LLM, falling back to pattern matching")
+                logger.warning("Empty response from LLM")
                 return None
                 
-            logger.info(f"LLM Intent Classification Response: {response_text}")
+            logger.info(f"LLM Intent Classification Response received")
             
             # Parse the JSON response
             # Extract JSON from response, handling potential text around it
@@ -197,8 +171,8 @@ Use only the intent names from the list above. The confidence should be between 
                     
                     # Validate intent
                     if intent not in self.intent_options:
-                        logger.warning(f"LLM returned invalid intent: {intent}, falling back")
-                        return None
+                        logger.warning(f"LLM returned invalid intent: {intent}")
+                        return self._create_fallback_intent_scores()
                     
                     # Validate confidence
                     confidence = max(0.0, min(1.0, confidence))
@@ -212,7 +186,6 @@ Use only the intent names from the list above. The confidence should be between 
                     
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse JSON from LLM response: {e}")
-                    logger.error(f"Response was: {json_str}")
                     return None
             else:
                 logger.warning("No JSON found in LLM response")
@@ -222,53 +195,16 @@ Use only the intent names from the list above. The confidence should be between 
             logger.error(f"Error in LLM intent classification: {str(e)}")
             return None
     
-    async def classify_intent_with_patterns(self, utterance: str) -> Dict[str, float]:
-        """
-        Classify intent using pattern matching as fallback
-        
-        Args:
-            utterance: The user's message
-            
-        Returns:
-            Dictionary of intent names and confidence scores
-        """
-        logger.info("Using pattern-based intent classification")
-        
-        # Initialize scores for all intents
-        scores = {intent: 0.0 for intent in self.intent_options}
-        scores["out_of_scope"] = 0.1  # Default low score for out_of_scope
-        
-        # Calculate scores based on pattern matches
-        for intent, patterns in self.compiled_patterns.items():
-            matches = sum(1 for pattern in patterns if pattern.search(utterance))
-            if matches > 0:
-                # Calculate score based on number of matches
-                # More matches = higher confidence
-                base_score = 0.5
-                match_score = min(matches * 0.15, 0.4)  # Up to 0.4 for multiple matches
-                scores[intent] = base_score + match_score
-        
-        # Special case: if inform_symptoms has evidence but not very strong,
-        # and the text is long enough, increase its score
-        if 0.2 < scores["inform_symptoms"] < 0.7 and len(utterance.split()) > 5:
-            scores["inform_symptoms"] += 0.15
-        
-        # If asking a question, boost ask_medical_info
-        if "?" in utterance:
-            scores["ask_medical_info"] = max(scores["ask_medical_info"], 0.75)
-        
-        # If no intent has significant confidence, boost out_of_scope
-        if all(score < 0.4 for intent, score in scores.items() if intent != "out_of_scope"):
-            scores["out_of_scope"] = 0.5
-        
-        # Log the scores
-        logger.info(f"Pattern-based intent scores: {scores}")
-        
+    def _create_fallback_intent_scores(self) -> Dict[str, float]:
+        """Create a minimal fallback intent classification"""
+        # Set out_of_scope as most likely, but with low confidence
+        scores = {intent: 0.1 for intent in self.intent_options}
+        scores["out_of_scope"] = 0.4
         return scores
     
     async def classify_intent(self, utterance: str) -> Dict[str, float]:
         """
-        Classify the intent of a user utterance using LLM first, then pattern matching as fallback
+        Classify the intent of a user utterance
         
         Args:
             utterance: The user's message
@@ -279,11 +215,26 @@ Use only the intent names from the list above. The confidence should be between 
         if not utterance.strip():
             return {"out_of_scope": 1.0}
         
-        # Try LLM classification first
+        # Use LLM classification - this is the primary method
         llm_result = await self.classify_intent_with_llm(utterance)
         
         if llm_result:
             return llm_result
+        
+        # If LLM classification fails, use minimal fallback logic
+        # Just a very basic check for common patterns
+        result = self._create_fallback_intent_scores()
+        
+        # Very minimal fallback checks - only for critical functionality
+        if any(greeting in utterance.lower() for greeting in ["hello", "hi", "hey", "greetings"]):
+            result["greet"] = 0.8
+        elif "?" in utterance:
+            result["ask_medical_info"] = 0.6
+        elif any(word in utterance.lower() for word in ["yes", "yeah", "correct"]):
+            result["confirm"] = 0.8
+        elif any(word in utterance.lower() for word in ["no", "nope", "not"]):
+            result["deny"] = 0.8
+        elif any(word in utterance.lower() for word in ["bye", "goodbye", "thanks", "thank you"]):
+            result["goodbye"] = 0.8
             
-        # Fall back to pattern-based classification if LLM fails
-        return await self.classify_intent_with_patterns(utterance)
+        return result
