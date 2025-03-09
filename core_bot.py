@@ -297,7 +297,7 @@ Models Used:
 ----------------------------------------
 """
         return diagnostic_info
-    
+        
     async def process_message(self, user_id: str, message: str, include_diagnostics: bool = True) -> str:
         """
         Process a user message and return the response with diagnostic information
@@ -374,11 +374,14 @@ Models Used:
         
         # Optionally include diagnostic information in the response
         if include_diagnostics:
+            # Include intent classification details in diagnostic info
+            intent_details = f"{top_intent} (confidence: {top_score:.2f})"
+            
             # Create diagnostic block
             diagnostic_info = self._generate_diagnostic_info(
                 user_id, 
                 patient_data, 
-                top_intent, 
+                intent_details, 
                 user_context, 
                 model_info
             )
@@ -388,8 +391,7 @@ Models Used:
             return enhanced_response
         else:
             return full_response
-        
-        
+
 # External functions for API and CLI interfaces
 # Global dictionary to store bot instances
 _bot_instances = {}
