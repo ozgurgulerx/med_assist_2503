@@ -1,12 +1,12 @@
 """
-Advanced Medical Intent Classification System with Dialogue State Tracking
+Pure LLM-Based Medical Intent Classification System
 """
 import os
 import re
 import json
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple, Set
+from typing import Dict, Any, Optional, List, Tuple
 from dotenv import load_dotenv
 
 # Semantic Kernel imports
@@ -69,55 +69,90 @@ class DialogueStateTracker:
         """Get the type of response expected from the user"""
         return self.expected_responses.get(user_id)
     
-    def update_from_assistant_message(self, user_id: str, message: str) -> None:
+    async def analyze_assistant_message(self, user_id: str, message: str, llm_service) -> None:
         """
-        Update dialogue state based on assistant's message
+        Update dialogue state based on assistant's message using LLM analysis
         
         Args:
             user_id: The user's identifier
             message: The assistant's message
+            llm_service: LLM service for analysis
         """
-        message_lower = message.lower()
-        
-        # Check if the message is asking about symptoms
-        if any(phrase in message_lower for phrase in [
-            "what symptoms", "any symptoms", "how are you feeling", 
-            "tell me about your", "experiencing any", "describe your",
-            "having any other", "when did", "how long"
-        ]):
-            self.update_state(user_id, "asking_followup")
-            self.set_expected_response(user_id, "symptom_details")
-        
-        # Check if the message is asking for confirmation
-        elif "?" in message and any(phrase in message_lower for phrase in [
-            "is that correct", "is this right", "do you", "have you", 
-            "would you", "could you", "are you"
-        ]):
-            self.set_expected_response(user_id, "yes_no")
+        if not llm_service:
+            # Default to collecting symptoms if no LLM available
+            self.update_state(user_id, "collecting_symptoms")
+            return
             
-            # If we're in verification mode
-            if "understand you're experiencing" in message_lower:
-                self.update_state(user_id, "verification")
-        
-        # Check if providing information
-        elif any(phrase in message_lower for phrase in [
-            "here's some information", "let me explain", "let me tell you about",
-            "is a condition", "treatment", "causes", "symptoms of"
-        ]):
-            self.update_state(user_id, "providing_info")
-            self.set_expected_response(user_id, "acknowledgment")
-        
-        # Check if closing
-        elif any(phrase in message_lower for phrase in [
-            "take care", "goodbye", "hope you feel better", "anything else",
-            "anything else i can help with"
-        ]):
-            self.update_state(user_id, "closing")
-            self.set_expected_response(user_id, "farewell")
+        try:
+            prompt = f"""Analyze this assistant message in a medical conversation to determine the dialogue state.
+
+Assistant message: "{message}"
+
+Based only on this message, identify what state the conversation is in:
+1. Is the assistant greeting the user? (greeting)
+2. Is the assistant asking about or exploring symptoms? (collecting_symptoms)
+3. Is the assistant asking follow-up questions about symptoms? (asking_followup)
+4. Is the assistant providing medical information? (providing_info)
+5. Is the assistant verifying or confirming symptoms? (verification)
+6. Is the assistant ending the conversation? (closing)
+
+Also determine what type of response is expected from the user:
+- Is a yes/no response expected? (yes_no)
+- Is detailed symptom information expected? (symptom_details)
+- Is an acknowledgment expected? (acknowledgment)
+- Is a farewell expected? (farewell)
+- Is an open-ended response expected? (open_ended)
+
+Respond with a JSON object:
+{{
+  "dialogue_state": "greeting|collecting_symptoms|asking_followup|providing_info|verification|closing",
+  "expected_response": "yes_no|symptom_details|acknowledgment|farewell|open_ended",
+  "reasoning": "Brief explanation"
+}}"""
+
+            # Create temporary chat history
+            chat_history = ChatHistory()
+            chat_history.add_user_message(prompt)
+            
+            # Configure execution settings
+            execution_settings = AzureChatPromptExecutionSettings()
+            execution_settings.temperature = 0.2
+            
+            # Get LLM response
+            result = await llm_service.get_chat_message_content(
+                chat_history=chat_history,
+                settings=execution_settings,
+                kernel=None
+            )
+            
+            response_text = str(result)
+            
+            # Parse the JSON response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed_result = json.loads(json_str)
+                
+                # Extract dialogue state and expected response
+                dialogue_state = parsed_result.get("dialogue_state")
+                expected_response = parsed_result.get("expected_response")
+                
+                if dialogue_state and dialogue_state in self.states:
+                    self.update_state(user_id, dialogue_state)
+                
+                if expected_response:
+                    self.set_expected_response(user_id, expected_response)
+                
+                logger.info(f"Dialogue state analysis: {dialogue_state}, expected response: {expected_response}")
+                
+        except Exception as e:
+            logger.error(f"Error analyzing assistant message: {str(e)}")
+            # Default to collecting symptoms in case of error
+            self.update_state(user_id, "collecting_symptoms")
 
 
 class MedicalIntentClassifier:
-    """Advanced intent classification with contextual understanding for medical dialogues"""
+    """Pure LLM-based intent classification system with no hardcoded patterns"""
     
     def __init__(self, chat_service: AzureChatCompletion = None, kernel: Kernel = None):
         """
@@ -142,10 +177,10 @@ class MedicalIntentClassifier:
         if chat_service is None:
             try:
                 self.chat_service = AzureChatCompletion(
-                    deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
+                    deployment_name="gpt-4o",
                     endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                     api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                    api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+                    api_version="2024-06-01"
                 )
                 self.kernel.add_service(self.chat_service)
                 logger.info("Created Azure OpenAI service for intent classification")
@@ -208,7 +243,9 @@ class MedicalIntentClassifier:
         
         # Update dialogue state if this is an assistant message
         if role == "assistant":
-            self.dialogue_tracker.update_from_assistant_message(user_id, message)
+            asyncio.create_task(self.dialogue_tracker.analyze_assistant_message(
+                user_id, message, self.chat_service
+            ))
             
             # If it's a question, store it to help with follow-up classification
             if "?" in message:
@@ -258,8 +295,8 @@ class MedicalIntentClassifier:
         if not self.chat_service:
             return None
         
-        # Skip this analysis for certain message types
-        if len(utterance.split()) <= 1:  # Very short responses
+        # Skip this analysis for very short responses to avoid unnecessary API calls
+        if len(utterance.split()) <= 1:
             return None
         
         prompt = f"""You're analyzing a patient's response to determine if it contains health-related information, even if implicit.
@@ -268,19 +305,9 @@ Previous assistant question: "{previous_question}"
 Current dialogue state: {dialogue_state}
 Patient's response: "{utterance}"
 
-In a medical conversation, patients often provide symptom information indirectly or implicitly. 
-Consider all possible ways this response might contain or imply health information:
-
-1. Direct symptom descriptions
-2. Descriptions of bodily sensations or experiences
-3. Timeframes that relate to a health condition
-4. Information about activities affected by health
-5. Emotional states that could be health-related
-6. Descriptions of changes in physical or mental state
-7. Responses to questions about health that confirm or deny
-8. Information about medications or treatments
-
+In a medical conversation, patients often provide symptom information indirectly or implicitly.
 Analyze whether this response contains ANY health-related information, even if subtle or implicit.
+
 Respond with a JSON object:
 {{
   "contains_health_info": true or false,
@@ -373,14 +400,6 @@ Given this full context, classify the user's intent into one of these categories
 - goodbye: Closing the conversation
 - out_of_scope: Unrelated to medical discussion
 
-CONTEXT-AWARE ANALYSIS GUIDANCE:
-- If the assistant just asked about symptoms and the user responds with ANY information, it's likely "inform_symptoms"
-- Short answers to medical questions often contain implicit symptom information
-- Responses to questions that ask "do you have X?" are likely confirmations/denials AND symptom information
-- Even responses like "for about a week" to duration questions are "inform_symptoms"
-- In the "collecting_symptoms" or "asking_followup" states, most responses will be "inform_symptoms" unless clearly different
-- Pay special attention to the expected response type and dialogue state
-
 Respond with a JSON object:
 {{
   "intent": "the_intent_name",
@@ -461,9 +480,6 @@ Respond with a JSON object:
 
 Patient message: "{utterance}"
 
-Medical professionals understand that patients describe health concerns in many ways, from medical terminology to colloquial expressions.
-Patients may use vague terms, describe impacts rather than symptoms directly, or mention duration/patterns.
-
 Classify this message into one of these intent categories:
 
 - greet: Initial greeting or introduction
@@ -473,14 +489,6 @@ Classify this message into one of these intent categories:
 - deny: Negative responses (no, that's not right, etc.)
 - goodbye: Closing the conversation
 - out_of_scope: Unrelated to medical discussion
-
-MEDICAL INTENT ANALYSIS:
-- "Inform_symptoms" covers ALL expressions of physical/mental experiences or health concerns
-- Consider how patients in different demographics express health concerns
-- Implicit expressions like "I haven't been sleeping well" count as symptom information
-- Mentions of medication effects or changes in condition are symptom information
-- Health timeline information is symptom information
-- In a medical context, even vague expressions of unwellness should be classified as symptom information
 
 Respond with a JSON object:
 {{
@@ -545,82 +553,89 @@ Respond with a JSON object:
             logger.error(f"Error in medical knowledge classification: {str(e)}")
             return None
     
-    def _create_fallback_intent_scores(self, utterance: str, user_id: str) -> Dict[str, float]:
+    async def generate_llm_fallback(self, utterance: str, user_id: str) -> Dict[str, float]:
         """
-        Create a context-aware fallback intent classification when LLM calls fail
+        Generate a fallback intent classification using LLM with minimal context
+        when other methods fail
         
         Args:
             utterance: The user's message
             user_id: The user's identifier
             
         Returns:
-            Dictionary of intent scores based on dialogue context
+            Dictionary of intent scores based on LLM fallback
         """
-        # Set default scores with higher base score for symptom intent in medical context
-        scores = {intent: 0.1 for intent in self.intent_options}
-        
-        # Get dialogue context to influence the fallback
+        if not self.chat_service:
+            # Last resort emergency fallback
+            scores = {intent: 0.1 for intent in self.intent_options}
+            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection in medical context
+            return scores
+            
+        # Get minimal dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
-        expected_response = self.dialogue_tracker.get_expected_response(user_id)
-        
-        # Adjust base scores based on dialogue state
-        if dialogue_state in ["collecting_symptoms", "asking_followup"]:
-            # In these states, messages are more likely to be symptom information
-            scores["inform_symptoms"] = 0.5
-        elif dialogue_state == "verification":
-            # In verification state, responses are likely confirms or denies
-            scores["confirm"] = 0.4
-            scores["deny"] = 0.4
-        elif dialogue_state == "closing":
-            # In closing state, responses are likely goodbyes or confirms
-            scores["goodbye"] = 0.4
-            scores["confirm"] = 0.3
-        else:
-            # Default higher chance of symptoms in a medical context
-            scores["inform_symptoms"] = 0.3
-        
-        # Adjust based on expected response type
-        if expected_response == "symptom_details":
-            scores["inform_symptoms"] = 0.6
-        elif expected_response == "yes_no":
-            scores["confirm"] = 0.4
-            scores["deny"] = 0.4
-        
-        # Simple pattern matching for critical intents
-        utterance_lower = utterance.lower()
-        
-        # Check for yes/no responses
-        if any(word in utterance_lower for word in ["yes", "yeah", "correct", "right", "sure"]):
-            scores["confirm"] = 0.8
-            # If confirming in collecting_symptoms or verification state, it's also symptom info
-            if dialogue_state in ["collecting_symptoms", "verification", "asking_followup"]:
-                scores["inform_symptoms"] = 0.7
-            else:
-                scores["inform_symptoms"] = 0.2
-        elif any(word in utterance_lower for word in ["no", "not ", "don't", "nope", "incorrect"]):
-            scores["deny"] = 0.8
-            # If denying in collecting_symptoms or verification state, it's also symptom info
-            if dialogue_state in ["collecting_symptoms", "verification", "asking_followup"]:
-                scores["inform_symptoms"] = 0.7
-            else:
-                scores["inform_symptoms"] = 0.2
-        
-        # Check for greeting patterns
-        elif any(greeting in utterance_lower for greeting in ["hello", "hi ", "hey", "greetings"]):
-            scores["greet"] = 0.8
-            scores["inform_symptoms"] = 0.1
-        
-        # Check for goodbye patterns
-        elif any(word in utterance_lower for word in ["bye", "goodbye", "thanks", "thank you"]):
-            scores["goodbye"] = 0.8
-            scores["inform_symptoms"] = 0.1
-        
-        # Check for questions (might be medical info requests)
-        elif "?" in utterance or utterance_lower.startswith(("what", "how", "when", "where", "why", "can", "could")):
-            scores["ask_medical_info"] = 0.7
-            scores["inform_symptoms"] = 0.2
-        
-        return scores
+            
+        prompt = f"""You're a medical assistant analyzing a single user message.
+
+User message: "{utterance}"
+Current dialogue state: {dialogue_state}
+
+Classify which intent is most likely:
+
+greet | inform_symptoms | ask_medical_info | confirm | deny | goodbye | out_of_scope
+
+This is for a medical assistant, so be aware that many messages will contain health information.
+Respond with a JSON object:
+{{
+  "intent": "the_intent_name",
+  "confidence": 0.8
+}}"""
+
+        try:
+            # Create a temporary chat history
+            chat_history = ChatHistory()
+            chat_history.add_user_message(prompt)
+            
+            # Configure execution settings
+            execution_settings = AzureChatPromptExecutionSettings()
+            execution_settings.temperature = 0.1
+            
+            # Get LLM response
+            result = await self.chat_service.get_chat_message_content(
+                chat_history=chat_history,
+                settings=execution_settings,
+                kernel=self.kernel
+            )
+            
+            response_text = str(result)
+            
+            # Parse the JSON response
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed_result = json.loads(json_str)
+                
+                # Extract intent and confidence
+                intent = parsed_result.get("intent", "").lower()
+                confidence = float(parsed_result.get("confidence", 0.5))
+                
+                if intent in self.intent_options:
+                    # Create score dictionary
+                    scores = {i: 0.1 for i in self.intent_options}
+                    scores[intent] = confidence
+                    return scores
+            
+            # If we reached here, something went wrong with parsing
+            # Emergency fallback
+            scores = {intent: 0.1 for intent in self.intent_options}
+            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection
+            return scores
+            
+        except Exception as e:
+            logger.error(f"Error in LLM fallback: {str(e)}")
+            # Emergency fallback
+            scores = {intent: 0.1 for intent in self.intent_options}
+            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection
+            return scores
     
     async def weighted_ensemble_classification(self, methods_results: List[Tuple[str, Dict[str, float]]], 
                                               utterance: str, user_id: str) -> Dict[str, float]:
@@ -686,14 +701,14 @@ Respond with a JSON object:
                     
                     total_weight += method_weight
         
-        # If no methods returned results, return the fallback
+        # If no methods returned results, return the LLM fallback
         if total_weight < 0.1:
-            logger.warning("No classification methods succeeded, using fallback")
-            return self._create_fallback_intent_scores(utterance, user_id)
+            logger.warning("No classification methods succeeded, using LLM fallback")
+            return await self.generate_llm_fallback(utterance, user_id)
         
         # Normalize scores based on applied weight
         for intent in combined_scores:
-            combined_scores[intent] = combined_scores[intent] / total_weight
+            combined_scores[intent] = combined_scores[intent] / total_weight if total_weight > 0 else 0.1
         
         # Get the top intent and score
         top_intent = max(combined_scores.items(), key=lambda x: x[1])[0]
@@ -757,9 +772,9 @@ Respond with a JSON object:
             
             return ensemble_result
         
-        # If all methods failed, use the fallback
-        logger.warning("All classification methods failed, using dialogue-aware fallback")
-        fallback_result = self._create_fallback_intent_scores(utterance, user_id)
+        # If all methods failed, use the LLM fallback
+        logger.warning("All classification methods failed, using LLM fallback")
+        fallback_result = await self.generate_llm_fallback(utterance, user_id)
         
         # Cache the fallback result too
         self.classification_cache[cache_key] = fallback_result
