@@ -45,7 +45,7 @@ class LLMHandler:
                 api_version="2025-01-01-preview"
             )
             self.kernel.add_service(self.chat_service, service_id="mini")
-            logger.info(f"Added Azure OpenAI mini service with deployment: {os.getenv('AZURE_OPENAI_MINI_DEPLOYMENT_NAME', 'o3-mini')}")
+            logger.info(f"Added Azure OpenAI mini service with deployment: o3-mini")
             
             # Set up the full model service for critical operations
             self.full_model_service = AzureChatCompletion(
@@ -55,7 +55,7 @@ class LLMHandler:
                 api_version="2025-01-01-preview"
             )
             self.kernel.add_service(self.full_model_service, service_id="full")
-            logger.info(f"Added Azure OpenAI full service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'o3')}")
+            logger.info(f"Added Azure OpenAI full service with deployment: o3")
             
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")
