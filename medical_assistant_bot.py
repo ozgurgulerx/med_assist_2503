@@ -485,6 +485,33 @@ async def interactive_conversation():
             print(traceback.format_exc())
             print("\nBot: I'm sorry, I encountered an error. Please try again.")
 
+"""
+Add this function to medical_assistant_bot.py to handle API requests
+"""
+
+async def handle_message(message: str) -> str:
+    """
+    Process a single message from an API request and return the response
+    
+    Args:
+        message: The user's message text
+        
+    Returns:
+        The bot's response as a string
+    """
+    # Initialize the bot with a consistent user ID for API requests
+    bot = MedicalAssistantBot()
+    user_id = "api_user"
+    
+    try:
+        # Process the message
+        response = await bot.process_message(user_id, message)
+        return response
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error processing API message: {str(e)}\n{error_details}")
+        return f"I'm sorry, I encountered an error processing your message. Please try again."
 # Entry point for running the bot directly
 if __name__ == "__main__":
     asyncio.run(interactive_conversation())
