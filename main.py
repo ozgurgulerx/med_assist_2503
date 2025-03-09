@@ -50,15 +50,17 @@ async def chat(request: ChatRequest):
     """Receives user message and returns chatbot response"""
     logger.info(f"Received message: {request.message}")
 
-    # 🔹 Debug environment variables
-    logger.debug(f"ENV: AZURE_OPENAI_API_KEY = {os.getenv('AZURE_OPENAI_API_KEY')}")
-    logger.debug(f"ENV: AZURE_OPENAI_ENDPOINT = {os.getenv('AZURE_OPENAI_ENDPOINT')}")
+    # 🔹 Debugging request body
+    try:
+        logger.debug(f"Raw Request Data: {request.dict()}")
+    except Exception as e:
+        logger.error(f"Failed to parse request data: {str(e)}")
 
     try:
         logger.info("Calling interactive_conversation() function...")
         response = await interactive_conversation(request.message)
 
-        logger.info(f"Response generated: {response}")
+        logger.info(f"Generated response: {response}")
         return {"response": response}
 
     except Exception as e:
