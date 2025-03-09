@@ -722,60 +722,8 @@ Your answer should be helpful and informative while maintaining appropriate clin
         
         return full_response
 
-# Create a single global bot instance for all web requests
-# 
-_global_bot = None
-
-async def get_bot_instance():
-    """Get or create a singleton bot instance for web use"""
-    global _global_bot
-    if _global_bot is None:
-        _global_bot = MedicalAssistantBot()
-        logger.info("Created new MedicalAssistantBot instance for web use")
-    return _global_bot
-
 async def interactive_conversation(user_message):
-    """
-    Process a single message from the web frontend and return the response.
-    
-    Args:
-        user_message (str): The message from the user's frontend
-        
-    Returns:
-        str: The bot's response to be sent back to the frontend
-    """
-    logger.info(f"Received message from frontend: {user_message}")
-    
-    # Check for environment variables
-    if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
-        logger.warning("Azure OpenAI environment variables not set. Using fallback response.")
-        return "I'm currently operating with limited capabilities. Please make sure the server is properly configured with Azure OpenAI credentials."
-    
-    try:
-        # Get or create the bot instance (reused across requests)
-        bot = await get_bot_instance()
-        
-        # Use a consistent user ID for the web session
-        user_id = "web_user"
-        
-        # Process the message and get a response
-        response = await bot.process_message(user_id, user_message)
-        logger.info(f"Generated response: {response[:100]}..." if len(response) > 100 else f"Generated response: {response}")
-        
-        return response
-    except Exception as e:
-        # Log the full error details for debugging
-        logger.error(f"Error processing message: {str(e)}", exc_info=True)
-        import traceback
-        error_details = traceback.format_exc()
-        logger.error(f"Traceback: {error_details}")
-        
-        # Return a user-friendly error message to the frontend
-        return "I'm sorry, I encountered an error while processing your message. The error has been logged for our technical team to investigate."
-
-# For CLI use (when running the script directly)
-async def cli_conversation():
-    """Run an interactive CLI conversation with the medical assistant bot"""
+    """Run an interactive conversation with the medical assistant bot"""
     # Check for environment variables
     if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
         print("\nWARNING: Azure OpenAI environment variables not set.")
@@ -787,7 +735,7 @@ async def cli_conversation():
         print("  export VERIFICATION_OPENAI_DEPLOYMENT_NAME='o1'")
     
     bot = MedicalAssistantBot()
-    user_id = "cli_user"
+    user_id = "interactive_user"
     
     print("\n----- Starting Interactive Medical Assistant Conversation -----")
     print("Type your messages and press Enter. Type 'exit', 'quit', or 'bye' to end the conversation.\n")
@@ -816,5 +764,4 @@ async def cli_conversation():
             print("\nBot: I'm sorry, I encountered an error. Please try again.")
 
 if __name__ == "__main__":
-    # Run the CLI version when executed directly
-    asyncio.run(cli_conversation())
+    asyncio.run(interactive_conversation())
