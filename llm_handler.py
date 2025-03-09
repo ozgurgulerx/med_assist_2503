@@ -55,7 +55,7 @@ class LLMHandler:
                 api_version="2025-01-01-preview"
             )
             self.kernel.add_service(self.full_model_service, service_id="full")
-            logger.info(f"Added Azure OpenAI full service with deployment: o3")
+            logger.info(f"Added Azure OpenAI full service with deployment: o1")
             
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")

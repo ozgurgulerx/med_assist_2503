@@ -45,67 +45,67 @@ class DiagnosticEngine:
         
         return user_data["patient_data"]
     
-def add_symptom(self, patient_data: Dict[str, Any], symptom: str) -> None:
-    """
-    Add a symptom to patient data, or update existing symptoms with new details
-    
-    Args:
-        patient_data: The patient data dictionary
-        symptom: The symptom to add
-    """
-    if not symptom:
-        return
+    def add_symptom(self, patient_data: Dict[str, Any], symptom: str) -> None:
+        """
+        Add a symptom to patient data, or update existing symptoms with new details
         
-    # First check if this is new information to be combined with existing symptoms
-    symptoms = patient_data.get("symptoms", [])
-    
-    # If we already have symptoms and this adds details, combine them
-    if symptoms and symptom not in symptoms:
-        # Check for key symptom terms to determine if this is additional detail
-        # about an existing symptom or a completely new symptom
-        existing_keywords = []
-        for existing in symptoms:
-            # Extract key terms from existing symptoms
-            words = existing.lower().split()
-            existing_keywords.extend([w for w in words if len(w) > 3])
-        
-        # If the new symptom contains keywords from existing symptoms
-        # treat it as additional details
-        symptom_words = symptom.lower().split()
-        has_overlap = any(word in existing_keywords for word in symptom_words if len(word) > 3)
-        
-        if has_overlap:
-            # This is likely additional detail about the same symptoms
-            # Replace the most relevant symptom with a combined version
-            most_similar = None
-            highest_similarity = 0
+        Args:
+            patient_data: The patient data dictionary
+            symptom: The symptom to add
+        """
+        if not symptom:
+            return
             
-            for i, existing in enumerate(symptoms):
-                # Simple token overlap similarity
-                existing_tokens = set(existing.lower().split())
-                new_tokens = set(symptom.lower().split())
-                overlap = len(existing_tokens.intersection(new_tokens))
-                similarity = overlap / len(existing_tokens.union(new_tokens))
+        # First check if this is new information to be combined with existing symptoms
+        symptoms = patient_data.get("symptoms", [])
+        
+        # If we already have symptoms and this adds details, combine them
+        if symptoms and symptom not in symptoms:
+            # Check for key symptom terms to determine if this is additional detail
+            # about an existing symptom or a completely new symptom
+            existing_keywords = []
+            for existing in symptoms:
+                # Extract key terms from existing symptoms
+                words = existing.lower().split()
+                existing_keywords.extend([w for w in words if len(w) > 3])
+            
+            # If the new symptom contains keywords from existing symptoms
+            # treat it as additional details
+            symptom_words = symptom.lower().split()
+            has_overlap = any(word in existing_keywords for word in symptom_words if len(word) > 3)
+            
+            if has_overlap:
+                # This is likely additional detail about the same symptoms
+                # Replace the most relevant symptom with a combined version
+                most_similar = None
+                highest_similarity = 0
                 
-                if similarity > highest_similarity:
-                    highest_similarity = similarity
-                    most_similar = i
-            
-            if most_similar is not None and highest_similarity > 0.2:
-                # Combine the existing symptom with the new details
-                combined = f"{symptoms[most_similar]} ({symptom})"
-                symptoms[most_similar] = combined
-                patient_data["symptoms"] = symptoms
-                logger.info(f"Updated symptom with details: {combined}")
-                return
-    
-    # If it's a new symptom or we don't have any symptoms yet, add it
-    if symptom not in symptoms:
-        symptoms.append(symptom)
-        patient_data["symptoms"] = symptoms
-        logger.info(f"Added new symptom: {symptom}")
+                for i, existing in enumerate(symptoms):
+                    # Simple token overlap similarity
+                    existing_tokens = set(existing.lower().split())
+                    new_tokens = set(symptom.lower().split())
+                    overlap = len(existing_tokens.intersection(new_tokens))
+                    similarity = overlap / len(existing_tokens.union(new_tokens))
+                    
+                    if similarity > highest_similarity:
+                        highest_similarity = similarity
+                        most_similar = i
+                
+                if most_similar is not None and highest_similarity > 0.2:
+                    # Combine the existing symptom with the new details
+                    combined = f"{symptoms[most_similar]} ({symptom})"
+                    symptoms[most_similar] = combined
+                    patient_data["symptoms"] = symptoms
+                    logger.info(f"Updated symptom with details: {combined}")
+                    return
+        
+        # If it's a new symptom or we don't have any symptoms yet, add it
+        if symptom not in symptoms:
+            symptoms.append(symptom)
+            patient_data["symptoms"] = symptoms
+            logger.info(f"Added new symptom: {symptom}")
 
-    
+        
     def get_symptoms_text(self, patient_data: Dict[str, Any]) -> str:
         """
         Get all symptoms as a comma-separated string
