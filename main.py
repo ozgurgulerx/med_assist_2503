@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from medical_assistant_bot import handle_message
+from medical_assistant_bot import process_message
 
 # 🔹 Setup detailed logging
 #log_file = "/home/LogFiles/myapp.log"  # Save logs for debugging
@@ -54,8 +54,8 @@ async def chat(request: ChatRequest):
         logger.error(f"Failed to parse request data: {str(e)}")
     
     try:
-        logger.info("Calling handle_message() function...")
-        response = await handle_message(request.message)
+        logger.info("Calling process_message() function...")
+        response = await process_message(request.message)
         logger.info(f"Generated response: {response}")
         return {"response": response}
     except Exception as e:

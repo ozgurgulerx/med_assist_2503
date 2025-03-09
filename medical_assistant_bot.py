@@ -489,7 +489,7 @@ async def interactive_conversation():
 Add this function to medical_assistant_bot.py to handle API requests
 """
 
-async def handle_message(message: str) -> str:
+async def process_message(message: str) -> str:
     """
     Process a single message from an API request and return the response
     
