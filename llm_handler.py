@@ -52,7 +52,7 @@ class LLMHandler:
                 deployment_name="o1",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version=os.getenv("2025-01-01-preview")
+                api_version="2025-01-01-preview"
             )
             self.kernel.add_service(self.full_model_service, service_id="full")
             logger.info(f"Added Azure OpenAI full service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'o3')}")
