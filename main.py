@@ -11,15 +11,13 @@ import uvicorn
 from medical_assistant_bot import handle_message
 
 # 🔹 Setup detailed logging
-log_file = "/home/LogFiles/myapp.log"  # Save logs for debugging
+#log_file = "/home/LogFiles/myapp.log"  # Save logs for debugging
 logging.basicConfig(
     level=logging.DEBUG,  # Set to DEBUG for detailed logs
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),  # Print logs to console
-        logging.FileHandler(log_file),  # Save logs to a file
-    ],
+    handlers=[logging.StreamHandler()]  # Log only to stdout
 )
+
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
