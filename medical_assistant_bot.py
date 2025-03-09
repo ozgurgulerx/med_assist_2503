@@ -41,13 +41,13 @@ class MedicalAssistantBot:
         # Add Azure OpenAI service
         try:
             self.chat_service = AzureChatCompletion(
-                deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini"),
+                deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "o3-mini"),
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
             )
             self.kernel.add_service(self.chat_service)
-            logger.info(f"Added Azure OpenAI service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o-mini')}")
+            logger.info(f"Added Azure OpenAI service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o')}")
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI service: {str(e)}")
             logger.warning("The bot will continue with fallback responses instead of actual LLM calls")

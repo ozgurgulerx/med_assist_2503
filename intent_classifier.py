@@ -50,7 +50,7 @@ class IntentClassificationService:
         if chat_service is None:
             try:
                 self.chat_service = AzureChatCompletion(
-                    deployment_name=os.getenv("INTENT_AZURE_OPENAI_DEPLOYMENT_NAME"),
+                    deployment_name=os.getenv("INTENT_AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
                     endpoint=os.getenv("INTENT_AZURE_OPENAI_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT")),
                     api_key=os.getenv("INTENT_AZURE_OPENAI_API_KEY", os.getenv("AZURE_OPENAI_API_KEY")),
                     api_version="2024-06-01"
