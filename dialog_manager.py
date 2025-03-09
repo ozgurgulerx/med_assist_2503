@@ -118,7 +118,28 @@ class DialogManager:
         """
         current_state = self.get_user_state(user_id)
         state_info = self.dialog_states.get(current_state, {})
-        next_state = state_info.get("transitions", {}).get(intent, current_state)
+        transitions = state_info.get("transitions", {})
+        
+        # Log the intent and current state for debugging
+        logger.info(f"Determining next state from {current_state} with intent: {intent}")
+        
+        # Special case: if we're collecting symptoms and get another inform_symptoms intent,
+        # we should stay in the collecting_symptoms state
+        if current_state == "collecting_symptoms" and intent == "inform_symptoms":
+            logger.info(f"User {user_id} provided more symptoms, staying in collecting_symptoms state")
+            return "collecting_symptoms"
+        
+        # Normal transition based on intent
+        next_state = transitions.get(intent, current_state)
+        
+        # If we're in verification and the user confirms, move to diagnosis
+        if current_state == "verification" and intent == "confirm":
+            next_state = "generating_diagnosis"
+        
+        # If we're in verification and the user denies or provides more symptoms,
+        # go back to collecting symptoms
+        if current_state == "verification" and (intent == "deny" or intent == "inform_symptoms"):
+            next_state = "collecting_symptoms"
         
         logger.info(f"Transitioning user {user_id} from {current_state} to {next_state} (intent: {intent})")
         return next_state
@@ -157,11 +178,16 @@ class DialogManager:
         symptoms = patient_data.get("symptoms", [])
         confidence = patient_data.get("diagnosis_confidence", 0.0)
         
-        # Need at least 2 symptoms and 70% confidence to verify
-        should_verify = len(symptoms) >= 2 and confidence >= 0.7
+        # Count how many rounds of follow-up questions we've had
+        question_count = len(patient_data.get("asked_questions", []))
+        
+        # Need at least 1 symptom and either:
+        # - 60% confidence, or
+        # - At least 3 rounds of follow-up questions
+        should_verify = (len(symptoms) >= 1 and (confidence >= 0.6 or question_count >= 3))
         
         if should_verify:
-            logger.info(f"Transitioning to verification for user {user_id} (confidence: {confidence:.2f})")
+            logger.info(f"Transitioning to verification for user {user_id} (confidence: {confidence:.2f}, questions: {question_count})")
             self.set_user_state(user_id, "verification")
             
         return should_verify

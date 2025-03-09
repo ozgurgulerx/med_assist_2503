@@ -45,17 +45,66 @@ class DiagnosticEngine:
         
         return user_data["patient_data"]
     
-    def add_symptom(self, patient_data: Dict[str, Any], symptom: str) -> None:
-        """
-        Add a symptom to patient data
+def add_symptom(self, patient_data: Dict[str, Any], symptom: str) -> None:
+    """
+    Add a symptom to patient data, or update existing symptoms with new details
+    
+    Args:
+        patient_data: The patient data dictionary
+        symptom: The symptom to add
+    """
+    if not symptom:
+        return
         
-        Args:
-            patient_data: The patient data dictionary
-            symptom: The symptom to add
-        """
-        if symptom and symptom not in patient_data["symptoms"]:
-            patient_data["symptoms"].append(symptom)
-            logger.info(f"Added symptom: {symptom}")
+    # First check if this is new information to be combined with existing symptoms
+    symptoms = patient_data.get("symptoms", [])
+    
+    # If we already have symptoms and this adds details, combine them
+    if symptoms and symptom not in symptoms:
+        # Check for key symptom terms to determine if this is additional detail
+        # about an existing symptom or a completely new symptom
+        existing_keywords = []
+        for existing in symptoms:
+            # Extract key terms from existing symptoms
+            words = existing.lower().split()
+            existing_keywords.extend([w for w in words if len(w) > 3])
+        
+        # If the new symptom contains keywords from existing symptoms
+        # treat it as additional details
+        symptom_words = symptom.lower().split()
+        has_overlap = any(word in existing_keywords for word in symptom_words if len(word) > 3)
+        
+        if has_overlap:
+            # This is likely additional detail about the same symptoms
+            # Replace the most relevant symptom with a combined version
+            most_similar = None
+            highest_similarity = 0
+            
+            for i, existing in enumerate(symptoms):
+                # Simple token overlap similarity
+                existing_tokens = set(existing.lower().split())
+                new_tokens = set(symptom.lower().split())
+                overlap = len(existing_tokens.intersection(new_tokens))
+                similarity = overlap / len(existing_tokens.union(new_tokens))
+                
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    most_similar = i
+            
+            if most_similar is not None and highest_similarity > 0.2:
+                # Combine the existing symptom with the new details
+                combined = f"{symptoms[most_similar]} ({symptom})"
+                symptoms[most_similar] = combined
+                patient_data["symptoms"] = symptoms
+                logger.info(f"Updated symptom with details: {combined}")
+                return
+    
+    # If it's a new symptom or we don't have any symptoms yet, add it
+    if symptom not in symptoms:
+        symptoms.append(symptom)
+        patient_data["symptoms"] = symptoms
+        logger.info(f"Added new symptom: {symptom}")
+
     
     def get_symptoms_text(self, patient_data: Dict[str, Any]) -> str:
         """
@@ -87,21 +136,47 @@ class DiagnosticEngine:
             return ""
         return ", ".join(questions)
     
-    async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
-        """
-        Update diagnosis confidence for patient data
-        
-        Args:
-            patient_data: The patient data dictionary
-        """
-        symptoms = self.get_symptoms_text(patient_data)
-        confidence, reasoning = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
-        
-        patient_data["diagnosis_confidence"] = confidence
-        patient_data["confidence_reasoning"] = reasoning
-        
-        logger.info(f"Updated diagnosis confidence: {confidence:.2f}")
-        logger.info(f"Confidence reasoning: {reasoning}")
+async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
+    """
+    Update diagnosis confidence for patient data
+    
+    Args:
+        patient_data: The patient data dictionary
+    """
+    symptoms = self.get_symptoms_text(patient_data)
+    
+    # If we have no symptoms or just blank entries, set confidence to 0
+    if not symptoms or symptoms == "unknown symptoms":
+        patient_data["diagnosis_confidence"] = 0.0
+        patient_data["confidence_reasoning"] = "Insufficient information"
+        return
+    
+    # Count how many questions we've asked
+    question_count = len(patient_data.get("asked_questions", []))
+    
+    # If we have symptoms but haven't asked any follow-up questions yet,
+    # set a minimum baseline confidence based on symptom count
+    if question_count == 0:
+        symptom_count = len(patient_data.get("symptoms", []))
+        # Start with a low baseline confidence
+        baseline_confidence = min(0.1 * symptom_count, 0.4)
+        patient_data["diagnosis_confidence"] = baseline_confidence
+        patient_data["confidence_reasoning"] = "Initial symptoms provided, awaiting more details"
+        logger.info(f"Set baseline confidence: {baseline_confidence:.2f}")
+        return
+    
+    # Otherwise, use the LLM to calculate confidence
+    confidence_data = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
+    
+    # Extract confidence and reasoning
+    confidence = confidence_data.get("confidence", 0.0)
+    reasoning = confidence_data.get("reasoning", "No reasoning available")
+    
+    patient_data["diagnosis_confidence"] = confidence
+    patient_data["confidence_reasoning"] = reasoning
+    
+    logger.info(f"Updated diagnosis confidence: {confidence:.2f}")
+    logger.info(f"Confidence reasoning: {reasoning}")
     
     async def generate_followup_question(self, patient_data: Dict[str, Any]) -> str:
         """

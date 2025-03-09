@@ -390,6 +390,9 @@ Models Used:
             return full_response
 
 # External functions for API and CLI interfaces
+# Global dictionary to store bot instances
+_bot_instances = {}
+
 async def process_message_api(message: str, user_id: str = None, include_diagnostics: bool = True) -> str:
     """
     Process a single message from an API request and return the response with diagnostic information
@@ -402,23 +405,30 @@ async def process_message_api(message: str, user_id: str = None, include_diagnos
     Returns:
         The bot's response as a string with optional diagnostic information
     """
-    # Initialize the bot
-    bot = MedicalAssistantBot()
+    global _bot_instances
     
     # Use the provided user_id or generate a consistent one
     if not user_id:
         user_id = f"api_user_{hash(message) % 10000}"  # Simple hash-based ID if none provided
     
+    # Get or create a bot instance for this user
+    if user_id not in _bot_instances:
+        logger.info(f"Creating new bot instance for user: {user_id}")
+        _bot_instances[user_id] = MedicalAssistantBot()
+    
+    bot = _bot_instances[user_id]
+    
     try:
-        # Process the message with diagnostic information
+        # Process the message with the persistent bot instance
         response = await bot.process_message(user_id, message, include_diagnostics=include_diagnostics)
         return response
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        logger.error(f"Error processing API message: {str(e)}\n{error_details}")
+        logger.error(f"Error processing API message for user {user_id}: {str(e)}\n{error_details}")
         return f"I'm sorry, I encountered an error processing your message. Please try again."
-
+    
+    
 async def interactive_conversation():
     """Run an interactive conversation with the medical assistant bot"""
     # Check for environment variables
