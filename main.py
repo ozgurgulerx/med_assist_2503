@@ -8,11 +8,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
-from medical_assistant_bot import process_message  # Import the new function instead of interactive_conversation
+from medical_assistant_bot import interactive_conversation
 
 # 🔹 Setup detailed logging
 log_file = "/home/LogFiles/myapp.log"  # Save logs for debugging
-os.makedirs(os.path.dirname(log_file), exist_ok=True)  # Ensure log directory exists
+
 logging.basicConfig(
     level=logging.DEBUG,  # Set to DEBUG for detailed logs
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -49,18 +49,20 @@ async def root():
 async def chat(request: ChatRequest):
     """Receives user message and returns chatbot response"""
     logger.info(f"Received message: {request.message}")
-    
+
     # 🔹 Debugging request body
     try:
         logger.debug(f"Raw Request Data: {request.dict()}")
     except Exception as e:
         logger.error(f"Failed to parse request data: {str(e)}")
-    
+
     try:
-        logger.info("Calling process_message() function...")
-        response = await process_message(request.message)  # Use the new function
+        logger.info("Calling interactive_conversation() function...")
+        response = await interactive_conversation(request.message)
+
         logger.info(f"Generated response: {response}")
         return {"response": response}
+
     except Exception as e:
         logger.error(f"Chatbot processing error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Chatbot error: {str(e)}")
