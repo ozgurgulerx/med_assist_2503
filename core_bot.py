@@ -390,15 +390,15 @@ Models Used:
             return full_response
         
         try:
-    if top_intent == "inform_symptoms":
+            if top_intent == "inform_symptoms":
         # Add to symptoms if not already present
-        self.diagnostic_engine.add_symptom(patient_data, message)
+                self.diagnostic_engine.add_symptom(patient_data, message)
         
         # Update confidence after adding a new symptom
-        await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
+                await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
     
-    except Exception as e:
-        logger.error(f"Error processing symptoms: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error processing symptoms: {str(e)}")
     # Handle error gracefully
 
 # External functions for API and CLI interfaces
