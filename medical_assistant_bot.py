@@ -40,7 +40,7 @@ class MedicalAssistantBot:
         # Initialize Semantic Kernel
         self.kernel = Kernel()
         
-        # Add primary Azure OpenAI service (gpt-4o)
+        # Add primary Azure OpenAI service (o1-mini)
         try:
             self.primary_chat_service = AzureChatCompletion(
                 deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
@@ -49,7 +49,7 @@ class MedicalAssistantBot:
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
             )
             self.kernel.add_service(self.primary_chat_service)
-            logger.info(f"Added primary Azure OpenAI service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o')}")
+            logger.info(f"Added primary Azure OpenAI service with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'o1-mini')}")
         except Exception as e:
             logger.error(f"Failed to initialize primary Azure OpenAI service: {str(e)}")
             logger.warning("The bot will continue with fallback responses instead of actual LLM calls")
@@ -670,58 +670,108 @@ Your answer should be helpful and informative while maintaining appropriate clin
             logger.warning(f"Unknown action: {action_name}")
             return "I'm not sure how to respond to that. Could you please rephrase your question or concern?"
     
-    async def process_message(self, user_id: str, message: str) -> str:
-        """Process a user message and return the response"""
-        # Get user's current state and history
-        current_state = self.get_user_state(user_id)
-        history = self.get_chat_history(user_id)
-        patient_data = self.get_patient_data(user_id)
+async def process_message(self, user_id: str, message: str) -> str:
+    """Process a user message and return the response"""
+    # Get user's current state and history
+    current_state = self.get_user_state(user_id)
+    history = self.get_chat_history(user_id)
+    patient_data = self.get_patient_data(user_id)
+    
+    # Add user message to history
+    history.add_user_message(message)
+    
+    # Also store in patient data backup
+    patient_data["conversation_history"].append({"role": "user", "content": message})
+    
+    # Perform intent classification
+    intents = await self.intent_classifier.classify_intent(message)
+    top_intent = max(intents.items(), key=lambda x: x[1])[0]
+    top_score = max(intents.items(), key=lambda x: x[1])[1]
+    
+    logger.info(f"User message: {message}")
+    logger.info(f"Current state: {current_state}")
+    logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
+    
+    # If we're in greeting state and the intent is uncertain or not about symptoms,
+    # verify with an additional LLM call to ensure we don't miss symptom information
+    if current_state == "greeting" and top_intent != "inform_symptoms" and top_score < 0.9:
+        # Double-check with a focused medical symptom detection
+        symptom_check = await self._verify_symptom_content(message)
+        if symptom_check:
+            top_intent = "inform_symptoms"
+            top_score = 0.9
+            logger.info("Secondary symptom verification detected symptoms")
+    
+    # Check for override from assessment
+    if "next_intent" in patient_data:
+        top_intent = patient_data.pop("next_intent")
+        logger.info(f"Overriding intent to: {top_intent} based on assessment")
         
-        # Add user message to history
-        history.add_user_message(message)
-        
-        # Also store in patient data backup
-        patient_data["conversation_history"].append({"role": "user", "content": message})
-        
-        # Classify intent
-        intents = await self.intent_classifier.classify_intent(message)
-        top_intent = max(intents.items(), key=lambda x: x[1])[0]
-        top_score = max(intents.items(), key=lambda x: x[1])[1]
-        
-        logger.info(f"User message: {message}")
-        logger.info(f"Current state: {current_state}")
-        logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
-        
-        # Check for override from assessment
-        if "next_intent" in patient_data:
-            top_intent = patient_data.pop("next_intent")
-            logger.info(f"Overriding intent to: {top_intent} based on assessment")
-        
-        # Determine next state based on current state and intent
-        state_info = self.dialog_states.get(current_state, {})
-        next_state = state_info.get("transitions", {}).get(top_intent, current_state)
-        
-        # Get the next action to execute
-        next_actions = self.dialog_states.get(next_state, {}).get("next_actions", [])
-        
-        # Execute actions and collect responses
-        responses = []
-        for action in next_actions:
-            response = await self.execute_action(action, user_id, message)
-            responses.append(response)
-        
-        # Update user state
-        self.set_user_state(user_id, next_state)
-        logger.info(f"Transitioned to state: {next_state}")
-        
-        # Combine responses
-        full_response = " ".join(responses)
-        
-        # Add assistant response to history
-        history.add_assistant_message(full_response)
-        
-        return full_response
+    # Determine next state based on current state and intent
+    state_info = self.dialog_states.get(current_state, {})
+    next_state = state_info.get("transitions", {}).get(top_intent, current_state)
+    
+    # Get the next action to execute
+    next_actions = self.dialog_states.get(next_state, {}).get("next_actions", [])
+    
+    # Execute actions and collect responses
+    responses = []
+    for action in next_actions:
+        response = await self.execute_action(action, user_id, message)
+        responses.append(response)
+    
+    # Update user state
+    self.set_user_state(user_id, next_state)
+    logger.info(f"Transitioned to state: {next_state} from {current_state}")
+    
+    # Combine responses
+    full_response = " ".join(responses)
+    
+    # Add assistant response to history
+    history.add_assistant_message(full_response)
+    
+    return full_response
 
+async def _verify_symptom_content(self, message: str) -> bool:
+    """
+    Uses the LLM to verify if a message contains any symptoms or health concerns,
+    without relying on hardcoded keywords.
+    """
+    if not self.primary_chat_service:
+        logger.warning("Cannot perform symptom verification without LLM service")
+        return False
+        
+    try:
+        verification_prompt = f"""You are a medical symptom detector. Your ONLY task is to determine if the following message 
+contains ANY mention of symptoms, health concerns, or medical conditions, even if described in vague or indirect terms.
+
+User message: "{message}"
+
+Respond with just a single word: "Yes" if any symptoms or health concerns are detected, or "No" if none are detected.
+Be very sensitive to detecting symptoms - err on the side of saying "Yes" if there's any possibility of health concerns."""
+
+        # Create a temp chat history for this prompt
+        chat_history = ChatHistory()
+        chat_history.add_user_message(verification_prompt)
+        
+        # Get LLM response
+        result = await self.primary_chat_service.get_chat_message_content(
+            chat_history=chat_history,
+            settings=self.execution_settings,
+            kernel=self.kernel
+        )
+        
+        response_text = str(result).strip().lower()
+        logger.info(f"Symptom verification response: {response_text}")
+        
+        # Return True if the response contains "yes"
+        return "yes" in response_text
+        
+    except Exception as e:
+        logger.error(f"Error in symptom verification: {str(e)}")
+        return False
+    
+    
 # Create a single global bot instance for all web requests
 # 
 _global_bot = None
@@ -783,7 +833,7 @@ async def cli_conversation():
         print("\nTo use Azure OpenAI, please set:")
         print("  export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
         print("  export AZURE_OPENAI_API_KEY='your-api-key'")
-        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='gpt-4o'")
+        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='o1-mini'")
         print("  export VERIFICATION_OPENAI_DEPLOYMENT_NAME='o1'")
     
     bot = MedicalAssistantBot()
