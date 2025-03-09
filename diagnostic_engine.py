@@ -144,6 +144,10 @@ async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> Non
         patient_data: The patient data dictionary
     """
     symptoms = self.get_symptoms_text(patient_data)
+    result = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
+    
+    patient_data["diagnosis_confidence"] = result["confidence"]
+    patient_data["confidence_reasoning"] = result["reasoning"]
     
     # If we have no symptoms or just blank entries, set confidence to 0
     if not symptoms or symptoms == "unknown symptoms":

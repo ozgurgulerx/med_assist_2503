@@ -388,6 +388,18 @@ Models Used:
             return enhanced_response
         else:
             return full_response
+        
+        try:
+    if top_intent == "inform_symptoms":
+        # Add to symptoms if not already present
+        self.diagnostic_engine.add_symptom(patient_data, message)
+        
+        # Update confidence after adding a new symptom
+        await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
+    
+    except Exception as e:
+        logger.error(f"Error processing symptoms: {str(e)}")
+    # Handle error gracefully
 
 # External functions for API and CLI interfaces
 # Global dictionary to store bot instances
@@ -428,7 +440,7 @@ async def process_message_api(message: str, user_id: str = None, include_diagnos
         logger.error(f"Error processing API message for user {user_id}: {str(e)}\n{error_details}")
         return f"I'm sorry, I encountered an error processing your message. Please try again."
     
-    
+
 async def interactive_conversation():
     """Run an interactive conversation with the medical assistant bot"""
     # Check for environment variables
