@@ -23,7 +23,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()]
 )
-
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -46,6 +45,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
+    include_diagnostics: bool = True  # New option to toggle diagnostic info
 
 @app.get("/")
 async def root():
@@ -61,12 +61,16 @@ async def root():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """Process a message and return the bot's response"""
+    """Process a message and return the bot's response with optional diagnostic information"""
     logger.info(f"Received message: {request.message}")
     
     try:
         logger.info(f"Processing message for user: {request.user_id or 'anonymous'}")
-        response = await process_message_api(request.message, request.user_id)
+        response = await process_message_api(
+            request.message,
+            request.user_id,
+            include_diagnostics=request.include_diagnostics
+        )
         logger.info(f"Generated response: {response[:100]}...")
         return {"response": response}
     except Exception as e:

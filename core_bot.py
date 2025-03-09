@@ -175,16 +175,93 @@ Give helpful, accurate information while emphasizing this is general advice and 
             logger.warning(f"Unknown action: {action_name}")
             return "I'm not sure how to respond to that."
     
-    async def process_message(self, user_id: str, message: str) -> str:
+    async def _generate_user_context(self, history: ChatHistory) -> str:
         """
-        Process a user message and return the response
+        Generate a summarized user context from conversation history
+        
+        Args:
+            history: The chat history
+                
+        Returns:
+            Summarized user context
+        """
+        if not self.llm_handler.is_available() or len(history.messages) < 3:
+            # If LLM not available or not enough history, return empty context
+            return "No context generated"
+        
+        try:
+            # Convert history to text format
+            history_text = ""
+            for msg in history.messages:
+                role = "User" if msg.role.lower() == "user" else "Assistant"
+                history_text += f"{role}: {msg.content}\n"
+            
+            # Create a prompt for context generation
+            prompt = f"""Based on the following conversation history, create a brief summary of the user's context, 
+including key health concerns, symptoms mentioned, and relevant details.
+
+CONVERSATION HISTORY:
+{history_text}
+
+Provide a concise (2-3 sentence) summary of this user's context.
+"""
+            
+            # Use mini model for efficiency
+            context = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
+            return context
+        except Exception as e:
+            logger.error(f"Error generating user context: {str(e)}")
+            return "Context generation failed"
+
+    def _generate_diagnostic_info(self, user_id: str, patient_data: Dict[str, Any], intent: str, user_context: str) -> str:
+        """
+        Generate a formatted diagnostic information block
+        
+        Args:
+            user_id: The user's identifier
+            patient_data: The patient data
+            intent: The top intent
+            user_context: Summarized user context
+                
+        Returns:
+            Formatted diagnostic information
+        """
+        # Get current dialog state
+        current_state = self.dialog_manager.get_user_state(user_id)
+        
+        # Get confidence and symptoms
+        symptoms_list = patient_data.get("symptoms", [])
+        symptoms_text = ", ".join(symptoms_list) if symptoms_list else "None recorded"
+        
+        confidence = patient_data.get("diagnosis_confidence", 0.0)
+        confidence_text = f"{confidence:.2f} ({confidence * 100:.1f}%)"
+        
+        confidence_reasoning = patient_data.get("confidence_reasoning", "No reasoning available")
+        
+        # Format the diagnostic information
+        diagnostic_info = f"""
+--------- DIAGNOSTIC INFORMATION ---------
+User Context: {user_context}
+Current State: {current_state}
+Last Intent: {intent}
+Symptoms: {symptoms_text}
+Diagnosis Confidence: {confidence_text}
+Confidence Reasoning: {confidence_reasoning}
+----------------------------------------
+"""
+        return diagnostic_info
+    
+    async def process_message(self, user_id: str, message: str, include_diagnostics: bool = True) -> str:
+        """
+        Process a user message and return the response with diagnostic information
         
         Args:
             user_id: The user's identifier
             message: The user's message
-            
+            include_diagnostics: Whether to include diagnostic info in the response
+                
         Returns:
-            Bot response text
+            Bot response text with optional diagnostic information
         """
         # Get user's history and data
         history = self.get_chat_history(user_id)
@@ -198,6 +275,9 @@ Give helpful, accurate information while emphasizing this is general advice and 
         
         # Add user message to history
         history.add_user_message(message)
+        
+        # Generate user context from conversation history
+        user_context = await self._generate_user_context(history)
         
         # Classify intent
         intents = await self.intent_classifier.classify_intent(message)
@@ -242,19 +322,29 @@ Give helpful, accurate information while emphasizing this is general advice and 
         # Add assistant response to history
         history.add_assistant_message(full_response)
         
-        return full_response
+        # Optionally include diagnostic information in the response
+        if include_diagnostics:
+            # Create diagnostic block
+            diagnostic_info = self._generate_diagnostic_info(user_id, patient_data, top_intent, user_context)
+            
+            # Append diagnostic information to response
+            enhanced_response = f"{full_response}\n\n{diagnostic_info}"
+            return enhanced_response
+        else:
+            return full_response
 
 # External functions for API and CLI interfaces
-async def process_message_api(message: str, user_id: str = None) -> str:
+async def process_message_api(message: str, user_id: str = None, include_diagnostics: bool = True) -> str:
     """
-    Process a single message from an API request and return the response
+    Process a single message from an API request and return the response with diagnostic information
     
     Args:
         message: The user's message text
         user_id: Optional user ID to maintain conversation state between requests
+        include_diagnostics: Whether to include diagnostic info in the response
         
     Returns:
-        The bot's response as a string
+        The bot's response as a string with optional diagnostic information
     """
     # Initialize the bot
     bot = MedicalAssistantBot()
@@ -264,8 +354,8 @@ async def process_message_api(message: str, user_id: str = None) -> str:
         user_id = f"api_user_{hash(message) % 10000}"  # Simple hash-based ID if none provided
     
     try:
-        # Process the message
-        response = await bot.process_message(user_id, message)
+        # Process the message with diagnostic information
+        response = await bot.process_message(user_id, message, include_diagnostics=include_diagnostics)
         return response
     except Exception as e:
         import traceback
@@ -304,18 +394,9 @@ async def interactive_conversation():
             break
         
         try:
-            # Process the message
-            response = await bot.process_message(user_id, user_input)
+            # Process the message with diagnostic information
+            response = await bot.process_message(user_id, user_input, include_diagnostics=True)
             print(f"\nBot: {response}")
-            
-            # Print confidence if in debug mode
-            if os.getenv("DEBUG_MODE") == "true":
-                user_data = bot.get_user_data(user_id)
-                if "patient_data" in user_data:
-                    confidence = user_data["patient_data"].get("diagnosis_confidence", 0.0)
-                    reasoning = user_data["patient_data"].get("confidence_reasoning", "No reasoning provided")
-                    print(f"\n[DEBUG] Current diagnosis confidence: {confidence:.2f}")
-                    print(f"[DEBUG] Reasoning: {reasoning}")
                 
         except Exception as e:
             print(f"\nError processing message: {str(e)}")
