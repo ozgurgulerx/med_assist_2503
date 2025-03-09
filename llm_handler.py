@@ -39,7 +39,7 @@ class LLMHandler:
         try:
             # Set up the main service (mini model for efficiency)
             self.chat_service = AzureChatCompletion(
-                deployment_name="o3-mini",
+                deployment_name="gpt-4o",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2025-01-01-preview"
@@ -49,7 +49,7 @@ class LLMHandler:
             
             # Set up the full model service for critical operations
             self.full_model_service = AzureChatCompletion(
-                deployment_name="o1",
+                deployment_name="gpt-4o",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2025-01-01-preview"
