@@ -1,152 +1,4 @@
-async def process_message_api(message: str, user_id: str = None) -> str:
-    """
-    Process a single message from an API request and return the response
-    
-    Args:
-        message: The user's message text
-        user_id: Optional user ID to maintain conversation state between requests
-        
-    Returns:
-        The bot's response as a string
-    """
-    # Initialize the bot
-    bot = MedicalAssistantBot()
-    
-    # Use the provided user_id or generate a consistent one
-    if not user_id:
-        user_id = f"api_user_{hash(message) % 10000}"  # Simple hash-based ID if none provided
-    
-    try:
-        # Process the message
-        response = await bot.process_message(user_id, message)
-        return response
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        logger.error(f"Error processing API message: {str(e)}\n{error_details}")
-        return f"I'm sorry, I encountered an error processing your message. Please try again."
-
-async def interactive_conversation():
-    """Run an interactive conversation with the medical assistant bot"""
-    # Check for environment variables
-    if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
-        print("\nWARNING: Azure OpenAI environment variables not set.")
-        print("Using fallback responses instead of actual AI service.")
-        print("\nTo use Azure OpenAI, please set:")
-        print("  export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
-        print("  export AZURE_OPENAI_API_KEY='your-api-key'")
-        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='o3'")
-        print("  export AZURE_OPENAI_MINI_DEPLOYMENT_NAME='o3-mini'")
-    
-    bot = MedicalAssistantBot()
-    user_id = "interactive_user"
-    
-    print("\n----- Starting Interactive Medical Assistant Conversation -----")
-    print("Type your messages and press Enter. Type 'exit', 'quit', or 'bye' to end the conversation.\n")
-    
-    # Initial greeting
-    print("Bot: Hello! I'm your medical assistant. How can I help you today?")
-    
-    while True:
-        # Get user input
-        user_input = input("\nYou: ").strip()
-        
-        # Check for exit commands
-        if user_input.lower() in ["exit", "quit", "bye"]:
-            print("\nBot: Thank you for talking with me. Take care!")
-            break
-        
-        try:
-            # Process the message
-            response = await bot.process_message(user_id, user_input)
-            print(f"\nBot: {response}")
-            
-            # Print confidence if in debug mode
-            if os.getenv("DEBUG_MODE") == "true":
-                user_data = bot.get_user_data(user_id)
-                if "patient_data" in user_data:
-                    confidence = user_data["patient_data"].get("diagnosis_confidence", 0.0)
-                    reasoning = user_data["patient_data"].get("confidence_reasoning", "No reasoning provided")
-                    print(f"\n[DEBUG] Current diagnosis confidence: {confidence:.2f}")
-                    print(f"[DEBUG] Reasoning: {reasoning}")
-                
-        except Exception as e:
-            print(f"\nError processing message: {str(e)}")
-            # Print more detailed error information
-            import traceback
-            print(traceback.format_exc())
-            print("\nBot: I'm sorry, I encountered an error. Please try again.")
-
-# Entry point for running the bot directly
-if __name__ == "__main__":
-    asyncio.run(interactive_conversation())    async def process_message(self, user_id: str, message: str) -> str:
-        """
-        Process a user message and return the response
-        
-        Args:
-            user_id: The user's identifier
-            message: The user's message
-            
-        Returns:
-            Bot response text
-        """
-        # Get user's history and data
-        history = self.get_chat_history(user_id)
-        user_data = self.get_user_data(user_id)
-        
-        # Ensure patient data exists
-        patient_data = self.diagnostic_engine.get_patient_data(user_data)
-        
-        # Store the original message for context in out_of_scope handling
-        self.dialog_manager.store_original_message(user_id, message)
-        
-        # Add user message to history
-        history.add_user_message(message)
-        
-        # Classify intent
-        intents = await self.intent_classifier.classify_intent(message)
-        top_intent = max(intents.items(), key=lambda x: x[1])[0]
-        top_score = max(intents.items(), key=lambda x: x[1])[1]
-        
-        logger.info(f"User message: {message}")
-        logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
-        logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
-        
-        # Extract symptoms if the intent is about symptoms
-        if top_intent == "inform_symptoms":
-            # Add to symptoms if not already present
-            self.diagnostic_engine.add_symptom(patient_data, message)
-            
-            # Update confidence after adding a new symptom
-            await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
-            
-            # Check if we should transition to verification based on confidence
-            if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
-                # This will update the state to verification if needed
-                logger.info(f"Confidence threshold reached, transitioning to verification")
-        
-        # Determine next state based on current state and intent
-        next_state = self.dialog_manager.get_next_state(user_id, top_intent)
-        
-        # Get the next actions to execute
-        next_actions = self.dialog_manager.get_next_actions(next_state)
-        
-        # Execute actions and collect responses
-        responses = []
-        for action in next_actions:
-            response = await self.execute_action(action, user_id, message)
-            responses.append(response)
-        
-        # Update user state
-        self.dialog_manager.set_user_state(user_id, next_state)
-        
-        # Combine responses
-        full_response = " ".join(responses)
-        
-        # Add assistant response to history
-        history.add_assistant_message(full_response)
-        
-        return full_response"""
+"""
 Core medical assistant bot using Semantic Kernel
 
 This is the main module that coordinates all components of the medical assistant bot.
@@ -322,3 +174,156 @@ Give helpful, accurate information while emphasizing this is general advice and 
         else:
             logger.warning(f"Unknown action: {action_name}")
             return "I'm not sure how to respond to that."
+    
+    async def process_message(self, user_id: str, message: str) -> str:
+        """
+        Process a user message and return the response
+        
+        Args:
+            user_id: The user's identifier
+            message: The user's message
+            
+        Returns:
+            Bot response text
+        """
+        # Get user's history and data
+        history = self.get_chat_history(user_id)
+        user_data = self.get_user_data(user_id)
+        
+        # Ensure patient data exists
+        patient_data = self.diagnostic_engine.get_patient_data(user_data)
+        
+        # Store the original message for context in out_of_scope handling
+        self.dialog_manager.store_original_message(user_id, message)
+        
+        # Add user message to history
+        history.add_user_message(message)
+        
+        # Classify intent
+        intents = await self.intent_classifier.classify_intent(message)
+        top_intent = max(intents.items(), key=lambda x: x[1])[0]
+        top_score = max(intents.items(), key=lambda x: x[1])[1]
+        
+        logger.info(f"User message: {message}")
+        logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
+        logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
+        
+        # Extract symptoms if the intent is about symptoms
+        if top_intent == "inform_symptoms":
+            # Add to symptoms if not already present
+            self.diagnostic_engine.add_symptom(patient_data, message)
+            
+            # Update confidence after adding a new symptom
+            await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
+            
+            # Check if we should transition to verification based on confidence
+            if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
+                # This will update the state to verification if needed
+                logger.info(f"Confidence threshold reached, transitioning to verification")
+        
+        # Determine next state based on current state and intent
+        next_state = self.dialog_manager.get_next_state(user_id, top_intent)
+        
+        # Get the next actions to execute
+        next_actions = self.dialog_manager.get_next_actions(next_state)
+        
+        # Execute actions and collect responses
+        responses = []
+        for action in next_actions:
+            response = await self.execute_action(action, user_id, message)
+            responses.append(response)
+        
+        # Update user state
+        self.dialog_manager.set_user_state(user_id, next_state)
+        
+        # Combine responses
+        full_response = " ".join(responses)
+        
+        # Add assistant response to history
+        history.add_assistant_message(full_response)
+        
+        return full_response
+
+# External functions for API and CLI interfaces
+async def process_message_api(message: str, user_id: str = None) -> str:
+    """
+    Process a single message from an API request and return the response
+    
+    Args:
+        message: The user's message text
+        user_id: Optional user ID to maintain conversation state between requests
+        
+    Returns:
+        The bot's response as a string
+    """
+    # Initialize the bot
+    bot = MedicalAssistantBot()
+    
+    # Use the provided user_id or generate a consistent one
+    if not user_id:
+        user_id = f"api_user_{hash(message) % 10000}"  # Simple hash-based ID if none provided
+    
+    try:
+        # Process the message
+        response = await bot.process_message(user_id, message)
+        return response
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error processing API message: {str(e)}\n{error_details}")
+        return f"I'm sorry, I encountered an error processing your message. Please try again."
+
+async def interactive_conversation():
+    """Run an interactive conversation with the medical assistant bot"""
+    # Check for environment variables
+    if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
+        print("\nWARNING: Azure OpenAI environment variables not set.")
+        print("Using fallback responses instead of actual AI service.")
+        print("\nTo use Azure OpenAI, please set:")
+        print("  export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
+        print("  export AZURE_OPENAI_API_KEY='your-api-key'")
+        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='o3'")
+        print("  export AZURE_OPENAI_MINI_DEPLOYMENT_NAME='o3-mini'")
+    
+    bot = MedicalAssistantBot()
+    user_id = "interactive_user"
+    
+    print("\n----- Starting Interactive Medical Assistant Conversation -----")
+    print("Type your messages and press Enter. Type 'exit', 'quit', or 'bye' to end the conversation.\n")
+    
+    # Initial greeting
+    print("Bot: Hello! I'm your medical assistant. How can I help you today?")
+    
+    while True:
+        # Get user input
+        user_input = input("\nYou: ").strip()
+        
+        # Check for exit commands
+        if user_input.lower() in ["exit", "quit", "bye"]:
+            print("\nBot: Thank you for talking with me. Take care!")
+            break
+        
+        try:
+            # Process the message
+            response = await bot.process_message(user_id, user_input)
+            print(f"\nBot: {response}")
+            
+            # Print confidence if in debug mode
+            if os.getenv("DEBUG_MODE") == "true":
+                user_data = bot.get_user_data(user_id)
+                if "patient_data" in user_data:
+                    confidence = user_data["patient_data"].get("diagnosis_confidence", 0.0)
+                    reasoning = user_data["patient_data"].get("confidence_reasoning", "No reasoning provided")
+                    print(f"\n[DEBUG] Current diagnosis confidence: {confidence:.2f}")
+                    print(f"[DEBUG] Reasoning: {reasoning}")
+                
+        except Exception as e:
+            print(f"\nError processing message: {str(e)}")
+            # Print more detailed error information
+            import traceback
+            print(traceback.format_exc())
+            print("\nBot: I'm sorry, I encountered an error. Please try again.")
+
+# Entry point for running the bot directly
+if __name__ == "__main__":
+    asyncio.run(interactive_conversation())
