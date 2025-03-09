@@ -2,8 +2,6 @@
 Diagnostic engine for medical assistant bot
 """
 import logging
-import re
-import json
 from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -104,8 +102,7 @@ class DiagnosticEngine:
             symptoms.append(symptom)
             patient_data["symptoms"] = symptoms
             logger.info(f"Added new symptom: {symptom}")
-
-        
+    
     def get_symptoms_text(self, patient_data: Dict[str, Any]) -> str:
         """
         Get all symptoms as a comma-separated string
@@ -136,51 +133,47 @@ class DiagnosticEngine:
             return ""
         return ", ".join(questions)
     
-async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
-    """
-    Update diagnosis confidence for patient data
-    
-    Args:
-        patient_data: The patient data dictionary
-    """
-    symptoms = self.get_symptoms_text(patient_data)
-    result = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
-    
-    patient_data["diagnosis_confidence"] = result["confidence"]
-    patient_data["confidence_reasoning"] = result["reasoning"]
-    
-    # If we have no symptoms or just blank entries, set confidence to 0
-    if not symptoms or symptoms == "unknown symptoms":
-        patient_data["diagnosis_confidence"] = 0.0
-        patient_data["confidence_reasoning"] = "Insufficient information"
-        return
-    
-    # Count how many questions we've asked
-    question_count = len(patient_data.get("asked_questions", []))
-    
-    # If we have symptoms but haven't asked any follow-up questions yet,
-    # set a minimum baseline confidence based on symptom count
-    if question_count == 0:
-        symptom_count = len(patient_data.get("symptoms", []))
-        # Start with a low baseline confidence
-        baseline_confidence = min(0.1 * symptom_count, 0.4)
-        patient_data["diagnosis_confidence"] = baseline_confidence
-        patient_data["confidence_reasoning"] = "Initial symptoms provided, awaiting more details"
-        logger.info(f"Set baseline confidence: {baseline_confidence:.2f}")
-        return
-    
-    # Otherwise, use the LLM to calculate confidence
-    confidence_data = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
-    
-    # Extract confidence and reasoning
-    confidence = confidence_data.get("confidence", 0.0)
-    reasoning = confidence_data.get("reasoning", "No reasoning available")
-    
-    patient_data["diagnosis_confidence"] = confidence
-    patient_data["confidence_reasoning"] = reasoning
-    
-    logger.info(f"Updated diagnosis confidence: {confidence:.2f}")
-    logger.info(f"Confidence reasoning: {reasoning}")
+    async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
+        """
+        Update diagnosis confidence for patient data
+        
+        Args:
+            patient_data: The patient data dictionary
+        """
+        symptoms = self.get_symptoms_text(patient_data)
+        
+        # If we have no symptoms or just blank entries, set confidence to 0
+        if not symptoms or symptoms == "unknown symptoms":
+            patient_data["diagnosis_confidence"] = 0.0
+            patient_data["confidence_reasoning"] = "Insufficient information"
+            return
+        
+        # Count how many questions we've asked
+        question_count = len(patient_data.get("asked_questions", []))
+        
+        # If we have symptoms but haven't asked any follow-up questions yet,
+        # set a minimum baseline confidence based on symptom count
+        if question_count == 0:
+            symptom_count = len(patient_data.get("symptoms", []))
+            # Start with a low baseline confidence
+            baseline_confidence = min(0.1 * symptom_count, 0.4)
+            patient_data["diagnosis_confidence"] = baseline_confidence
+            patient_data["confidence_reasoning"] = "Initial symptoms provided, awaiting more details"
+            logger.info(f"Set baseline confidence: {baseline_confidence:.2f}")
+            return
+        
+        # Otherwise, use the LLM to calculate confidence
+        confidence_data = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
+        
+        # Extract confidence and reasoning
+        confidence = confidence_data.get("confidence", 0.0)
+        reasoning = confidence_data.get("reasoning", "No reasoning available")
+        
+        patient_data["diagnosis_confidence"] = confidence
+        patient_data["confidence_reasoning"] = reasoning
+        
+        logger.info(f"Updated diagnosis confidence: {confidence:.2f}")
+        logger.info(f"Confidence reasoning: {reasoning}")
     
     async def generate_followup_question(self, patient_data: Dict[str, Any]) -> str:
         """
@@ -211,7 +204,8 @@ Previously asked questions: {asked}
 Generate a relevant follow-up question to better understand these symptoms."""
 
                 # Use mini model for follow-up questions to save cost
-                response = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
+                response = response_data.get("text", "")
                 
                 # Add this question to the list of asked questions
                 if response and "Error" not in response:
@@ -267,9 +261,9 @@ or if there's anything I've missed or misunderstood.
 Format your response as a direct question to the patient that summarizes the symptoms and asks for confirmation."""
                 
                 # Always use full model for verification
-                response = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
                 
-                return response
+                return response_data.get("text", "")
             except Exception as e:
                 logger.error(f"Error verifying symptoms with LLM: {str(e)}")
         
@@ -311,7 +305,8 @@ Be responsible and remind the patient this is not a substitute for professional 
 Adjust your language to reflect my confidence level - be more cautious with lower confidence."""
 
                 # Always use full model for diagnosis if available
-                response = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                response = response_data.get("text", "")
                 
                 # Store the diagnosis
                 patient_data["diagnosis"] = response
@@ -371,9 +366,9 @@ Focus on evidence-based, conservative recommendations.
 Emphasize these are general suggestions and not a replacement for professional medical care."""
 
                 # Use full model for mitigations if available
-                response = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
                 
-                return response
+                return response_data.get("text", "")
             except Exception as e:
                 logger.error(f"Error generating mitigations: {str(e)}")
         
