@@ -251,9 +251,60 @@ Give helpful, accurate information while emphasizing this is general advice and 
         elif action_name == "utter_goodbye":
             return "Take care and don't hesitate to return if you have more questions. Goodbye!"
         
+        elif action_name == "action_handle_out_of_scope":
+            return await self.action_handle_out_of_scope(user_id)
+        
         else:
             logger.warning(f"Unknown action: {action_name}")
             return "I'm not sure how to respond to that."
+    
+    async def action_handle_out_of_scope(self, user_id: str) -> str:
+        """
+        Handle out-of-scope messages by politely redirecting the conversation back to the medical context.
+        
+        Args:
+            user_id: The user's identifier
+            
+        Returns:
+            A response that acknowledges the off-topic message and steers back to the medical context
+        """
+        logger.info(f"Executing action: action_handle_out_of_scope")
+        
+        # Get user data and patient data
+        user_data = self.get_user_data(user_id)
+        patient_data = self.diagnostic_engine.get_patient_data(user_data)
+        
+        # Get the previous state to determine context-appropriate redirection
+        previous_state = ""
+        if user_id in self.dialog_manager.user_state_history:
+            previous_state = self.dialog_manager.user_state_history[user_id]
+            logger.info(f"Found previous state for user {user_id}: {previous_state}")
+        else:
+            logger.warning(f"No previous state found for user {user_id} in out-of-scope handler")
+        
+        # Generate a context-appropriate redirection message
+        redirect_message = ""
+        if previous_state == "collecting_symptoms":
+            redirect_message = "I understand, but to help with your medical concerns, I need to focus on your symptoms. "
+            if len(patient_data.get("symptoms", [])) > 0:
+                redirect_message += "Could you tell me more about the symptoms you're experiencing? "
+            else:
+                redirect_message += "Could you describe the symptoms that brought you here today? "
+        elif previous_state == "verification":
+            redirect_message = "I understand, but to complete your medical assessment, I need to verify the information you've provided. "
+            redirect_message += "Let's continue with the verification process. "
+        elif previous_state == "generating_diagnosis":
+            redirect_message = "I understand, but to provide you with an accurate assessment, I need to focus on your medical information. "
+            redirect_message += "Let's continue with your diagnosis. "
+        else:
+            # Default redirection for other states
+            redirect_message = "I understand you're asking about something outside the medical domain. "
+            redirect_message += "However, I'm designed to assist with medical concerns. Could we return to discussing your health questions? "
+        
+        # Add a gentle reminder about the bot's purpose
+        redirect_message += "As a medical assistant, I'm here to help with health-related questions and concerns."
+        
+        return redirect_message
     
     async def _generate_user_context(self, history: ChatHistory) -> Dict[str, Any]:
         """

@@ -15,14 +15,14 @@ class DialogManager:
 
     def __init__(self):
         """Initialize the dialog manager."""
-
+        
         # Define dialog states and transitions
         # Now includes all special transitions inside the dictionary
         self.dialog_states = {
             "greeting": {
                 "next_actions": ["utter_greet", "utter_how_can_i_help"],
                 "transitions": {
-                    "inform_symptoms": "collecting_symptoms",
+                    "symptomReporting": "collecting_symptoms",
                     "ask_medical_info": "providing_info",
                     "out_of_scope": "out_of_scope_handler"
                 }
@@ -30,21 +30,21 @@ class DialogManager:
             "collecting_symptoms": {
                 "next_actions": ["action_ask_followup_question"],
                 "transitions": {
-                    # Repeated inform_symptoms => stay collecting
-                    "inform_symptoms": "collecting_symptoms",
+                    # Repeated symptomReporting => stay collecting
+                    "symptomReporting": "collecting_symptoms",
                     "deny": "generating_diagnosis",
-                    "ask_medical_info": "providing_info",
-                    "goodbye": "farewell",
+                    "medicalInquiry": "providing_info",
+                    "endConversation": "farewell",
                     "out_of_scope": "out_of_scope_handler"
                 }
             },
             "providing_info": {
                 "next_actions": ["action_provide_medical_info", "utter_anything_else"],
                 "transitions": {
-                    "inform_symptoms": "collecting_symptoms",
-                    "ask_medical_info": "providing_info",
+                    "symptomReporting": "collecting_symptoms",
+                    "medicalInquiry": "providing_info",
                     "deny": "farewell",
-                    "goodbye": "farewell",
+                    "endConversation": "farewell",
                     "out_of_scope": "out_of_scope_handler"
                 }
             },
@@ -54,45 +54,48 @@ class DialogManager:
                     # e.g. confirm => generating_diagnosis
                     "confirm": "generating_diagnosis",
                     "deny": "collecting_symptoms",
-                    "inform_symptoms": "collecting_symptoms",
-                    "ask_medical_info": "providing_info"
+                    "symptomReporting": "collecting_symptoms",
+                    "medicalInquiry": "providing_info",
+                    "out_of_scope": "out_of_scope_handler"
                 }
             },
             "generating_diagnosis": {
                 "next_actions": ["action_provide_diagnosis", "utter_suggest_mitigations"],
                 "transitions": {
-                    "ask_medical_info": "providing_info",
+                    "medicalInquiry": "providing_info",
                     "confirm": "farewell",
-                    "goodbye": "farewell",
+                    "endConversation": "farewell",
                     "out_of_scope": "out_of_scope_handler"
                 }
             },
             "farewell": {
                 "next_actions": ["utter_goodbye"],
                 "transitions": {
+                    "symptomReporting": "collecting_symptoms",
+                    "medicalInquiry": "providing_info",
                     "out_of_scope": "out_of_scope_handler"
                 }
             },
             "out_of_scope_handler": {
-                "next_actions": ["action_handle_out_of_scope", "utter_redirect_to_medical"],
+                "next_actions": ["action_handle_out_of_scope"],
                 "transitions": {
-                    # All intents lead back to greeting or other relevant states
-                    "greet": "greeting",
-                    "inform_symptoms": "collecting_symptoms",
-                    "ask_medical_info": "providing_info",
-                    "confirm": "greeting",
-                    "deny": "greeting",
-                    "goodbye": "farewell",
-                    "out_of_scope": "greeting"
+                    "symptomReporting": "previous_state",
+                    "medicalInquiry": "previous_state",
+                    "confirm": "previous_state",
+                    "deny": "previous_state",
+                    "endConversation": "previous_state"
                 }
             }
         }
 
         # Current dialog state for each user
         self.user_states: Dict[str, str] = {}
-
+        
         # Store the original user message for context
         self.original_messages: Dict[str, str] = {}
+        
+        # Store user state history for returning from out-of-scope
+        self.user_state_history: Dict[str, str] = {}
 
     def get_user_state(self, user_id: str) -> str:
         """Get the current dialog state for a user."""
@@ -127,19 +130,48 @@ class DialogManager:
         """
         current_state = self.get_user_state(user_id)
         logger.info(f"Determining next state from {current_state} with intent: {intent}")
-
-        # Lookup transitions
-        state_info = self.dialog_states.get(current_state, {})
-        transitions = state_info.get("transitions", {})
-
-        # Handle symptom reporting intent specifically
-        if intent == "symptomReporting":
-            next_state = "collecting_symptoms"  # Force transition for symptom reporting
-        elif intent in transitions:
-            next_state = transitions[intent]
-        else:
-            next_state = current_state  # Fallback to current state if intent not recognized
-
+        
+        # Handle out_of_scope intent specially
+        if intent == "out_of_scope":
+            # Only store the current state if it's not already out_of_scope_handler
+            if current_state != "out_of_scope_handler":
+                # Store the current state before transitioning to out_of_scope_handler
+                self.user_state_history[user_id] = current_state
+                logger.info(f"Out-of-scope intent detected. Storing current state '{current_state}' and transitioning to out_of_scope_handler")
+            
+            # Transition to out_of_scope_handler
+            next_state = "out_of_scope_handler"
+            self.set_user_state(user_id, next_state)
+            return next_state
+            
+        # For all other intents, follow the standard transition rules
+        transitions = self.dialog_states.get(current_state, {}).get("transitions", {})
+        next_state = transitions.get(intent, current_state)  # Default to staying in current state
+        
+        # Handle special 'previous_state' marker in transitions
+        if next_state == "previous_state" and user_id in self.user_state_history:
+            next_state = self.user_state_history[user_id]
+            logger.info(f"Using special 'previous_state' transition to return to {next_state}")
+            
+            # Clear the history after using it to prevent circular references
+            if current_state == "out_of_scope_handler":
+                del self.user_state_history[user_id]
+                logger.info(f"Cleared state history for user {user_id} after returning from out_of_scope_handler")
+        
+        # Special case: If we're in out_of_scope_handler and get any intent other than out_of_scope,
+        # try to return to the previous state if available (fallback mechanism)
+        if current_state == "out_of_scope_handler" and intent != "out_of_scope" and next_state == current_state:
+            if user_id in self.user_state_history:
+                previous_state = self.user_state_history[user_id]
+                logger.info(f"Returning from out_of_scope_handler to previous state: {previous_state}")
+                next_state = previous_state
+                
+                # Clear the history after using it
+                del self.user_state_history[user_id]
+                logger.info(f"Cleared state history for user {user_id} after returning from out_of_scope_handler")
+            else:
+                logger.warning(f"No previous state found for user {user_id}, staying in {next_state}")
+        
         logger.info(f"Transitioning user {user_id} from {current_state} to {next_state} (intent: {intent})")
         self.set_user_state(user_id, next_state)
         return next_state

@@ -202,11 +202,26 @@ class MedicalIntentClassifier:
             "symptomClarification",
             "medicalInquiry",
             "checkDiagnosis",
-            "personalInfo",
+            "demographicInfo",
             "smallTalk",
-            "outOfScope",
+            "out_of_scope",
             "urgentEmergency",
-            "endConversation"
+            "endConversation",
+            "verification"
+        ]
+        
+        # Define examples of out-of-scope messages for better classification
+        self.out_of_scope_examples = [
+            "What's the weather like today?",
+            "Can you recommend a good restaurant?",
+            "Tell me about the latest news",
+            "What's your favorite movie?",
+            "How do I fix my computer?",
+            "Can you help me with my homework?",
+            "What's the capital of France?",
+            "Tell me a joke",
+            "Who won the game last night?",
+            "What's the best vacation spot?"
         ]
         
         # Initialize dialogue state tracker
@@ -401,11 +416,12 @@ Given this full context, classify the user's intent into one of these categories
 - symptomClarification
 - medicalInquiry
 - checkDiagnosis
-- personalInfo
+- demographicInfo
 - smallTalk
-- outOfScope
+- out_of_scope
 - urgentEmergency
 - endConversation
+- verification
 
 Respond with a JSON object:
 {{
@@ -495,11 +511,12 @@ Classify this message into one of these intent categories:
 - symptomClarification
 - medicalInquiry
 - checkDiagnosis
-- personalInfo
+- demographicInfo
 - smallTalk
-- outOfScope
+- out_of_scope
 - urgentEmergency
 - endConversation
+- verification
 
 Respond with a JSON object:
 {{
@@ -598,11 +615,12 @@ Classify which intent is most likely:
 - symptomClarification
 - medicalInquiry
 - checkDiagnosis
-- personalInfo
+- demographicInfo
 - smallTalk
-- outOfScope
+- out_of_scope
 - urgentEmergency
 - endConversation
+- verification
 
 This is for a medical assistant, so be aware that many messages will contain health information.
 Respond with a JSON object:
@@ -710,7 +728,13 @@ Respond with a JSON object:
                 
                 if method_name == "implied_symptoms":
                     # This is just a confidence measure for "symptomReporting"
-                    confidence = result
+                    if isinstance(result, dict):
+                        # If it's a dict, extract the symptomReporting confidence
+                        confidence = result.get("symptomReporting", 0.0)
+                    else:
+                        # If it's a float, use it directly
+                        confidence = result
+                        
                     if confidence > 0.5:
                         combined_scores["symptomReporting"] += confidence * method_weight
                         total_weight += method_weight
@@ -733,10 +757,8 @@ Respond with a JSON object:
             )
         
         # Get the top intent for logging
-        top_intent = max(combined_scores.items(), key=lambda x: x[1])[0]
-        top_score = combined_scores[top_intent]
-        
-        logger.info(f"Ensemble classification result: {top_intent} ({top_score:.2f})")
+        top_intent = max(combined_scores.items(), key=lambda x: x[1])
+        logger.info(f"Ensemble classification result: {top_intent[0]} ({top_intent[1]:.2f})")
         return combined_scores
     
     async def classify_intent(self, utterance: str, user_id: str = "default_user") -> Dict[str, float]:
@@ -751,54 +773,130 @@ Respond with a JSON object:
             Dictionary of intent names and confidence scores.
         """
         if not utterance.strip():
-            return {"outOfScope": 1.0}
+            return {"out_of_scope": 1.0}
         
         # Add this message to conversation history
         self.add_to_conversation_history(user_id, utterance, "user")
+        
+        # Check cache first
+        cache_key = f"{user_id}:{utterance}"
+        if cache_key in self.classification_cache:
+            return self.classification_cache[cache_key]
+        
+        # First, check if this is an out-of-scope message
+        out_of_scope_confidence = self.detect_out_of_scope(utterance)
+        if out_of_scope_confidence > 0.7:  # High confidence threshold for out-of-scope
+            logger.info(f"Detected out-of-scope message with confidence {out_of_scope_confidence:.2f}: '{utterance}'")
+            result = {"out_of_scope": out_of_scope_confidence}
+            self.classification_cache[cache_key] = result
+            return result
         
         # Get dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
         previous_question = self.get_previous_question(user_id)
         
-        # Check cache first for repeated identical messages
-        cache_key = f"{user_id}:{utterance}:{dialogue_state}"
-        if cache_key in self.classification_cache:
-            logger.info(f"Using cached classification result for: {utterance}")
-            return self.classification_cache[cache_key]
+        # Run classification methods
+        methods_results = []
         
-        # Run classification methods in parallel
-        tasks = [
-            self.classify_with_dialogue_context(utterance, user_id),
-            self.classify_with_medical_knowledge(utterance),
-            self.analyze_implied_symptoms(utterance, dialogue_state, previous_question)
+        # Method 1: Classify with dialogue context
+        try:
+            context_result = await self.classify_with_dialogue_context(utterance, user_id)
+            methods_results.append(("dialogue_context", context_result))
+        except Exception as e:
+            logger.warning(f"Error in dialogue context classification: {str(e)}")
+        
+        # Method 2: Classify with medical knowledge
+        try:
+            medical_result = await self.classify_with_medical_knowledge(utterance)
+            methods_results.append(("medical_knowledge", medical_result))
+        except Exception as e:
+            logger.warning(f"Error in medical knowledge classification: {str(e)}")
+        
+        # Method 3: Check for implied symptoms based on context
+        try:
+            implied_score = await self.analyze_implied_symptoms(utterance, dialogue_state, previous_question)
+            if implied_score > 0.5:  # Only include if reasonably confident
+                methods_results.append(("implied_symptoms", {"symptomReporting": implied_score}))
+        except Exception as e:
+            logger.warning(f"Error in implied symptom analysis: {str(e)}")
+        
+        # Method 4: LLM fallback if available and needed
+        if self.chat_service is not None and (len(methods_results) < 2 or any(r[1] and max(r[1].values()) < 0.7 for r in methods_results)):
+            try:
+                llm_result = await self.generate_llm_fallback(utterance, user_id)
+                methods_results.append(("llm_fallback", llm_result))
+            except Exception as e:
+                logger.warning(f"Error in LLM fallback classification: {str(e)}")
+        
+        # Combine results using weighted ensemble
+        if methods_results:
+            result = await self.weighted_ensemble_classification(methods_results, utterance, user_id)
+            
+            # Add a small confidence for out-of-scope based on our detection
+            # This ensures it's considered in the ensemble but doesn't override other strong signals
+            if "out_of_scope" not in result or result["out_of_scope"] < out_of_scope_confidence:
+                result["out_of_scope"] = out_of_scope_confidence
+        else:
+            # Fallback to a simple classification if all methods failed
+            result = {"out_of_scope": 0.8}  # Default to out-of-scope with high confidence if all else fails
+            logger.warning(f"All classification methods failed for: '{utterance}'")
+        
+        # Cache the result
+        self.classification_cache[cache_key] = result
+        
+        return result
+    
+    def detect_out_of_scope(self, utterance: str) -> float:
+        """
+        Detect if a message is out of scope for a medical assistant by comparing with examples
+        and checking for non-medical content.
+        
+        Args:
+            utterance: The user's message
+            
+        Returns:
+            Confidence score for out-of-scope detection (0.0-1.0)
+        """
+        # Normalize the utterance
+        normalized_utterance = utterance.lower().strip()
+        
+        # Direct match with examples (high confidence)
+        for example in self.out_of_scope_examples:
+            if normalized_utterance in example.lower() or example.lower() in normalized_utterance:
+                return 0.95
+        
+        # Check for common non-medical topics
+        non_medical_topics = [
+            "weather", "restaurant", "food", "movie", "film", "tv", "show", "news", 
+            "politics", "sports", "game", "joke", "funny", "computer", "technology", 
+            "homework", "school", "university", "travel", "vacation", "holiday", 
+            "music", "song", "book", "novel", "celebrity", "actor", "actress"
         ]
         
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Count how many non-medical topics are mentioned
+        topic_matches = sum(1 for topic in non_medical_topics if topic in normalized_utterance)
         
-        # Process results, filtering out exceptions
-        valid_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Classification method error: {str(result)}")
-            elif result is not None:
-                method_name = ["dialogue_context", "medical_knowledge", "implied_symptoms"][i]
-                valid_results.append((method_name, result))
+        # Calculate confidence based on topic matches
+        if topic_matches >= 2:
+            return 0.9
+        elif topic_matches == 1:
+            return 0.7
         
-        # Combine results with weighted ensemble
-        if valid_results:
-            ensemble_result = await self.weighted_ensemble_classification(valid_results, utterance, user_id)
+        # Check for question patterns about non-medical topics
+        question_patterns = [
+            "what is", "what's", "what are", "who is", "who's", "where is", 
+            "where's", "when is", "when's", "how do", "how can", "can you tell me", 
+            "do you know", "tell me about", "explain"
+        ]
+        
+        if any(pattern in normalized_utterance for pattern in question_patterns):
+            # If it's a question but doesn't contain medical terms, likely out of scope
+            medical_terms = ["symptom", "pain", "doctor", "hospital", "medicine", "medical", 
+                            "health", "disease", "condition", "treatment", "diagnosis", "sick", 
+                            "feel", "hurt", "ache", "fever", "cough", "headache"]
             
-            # Update cache with result
-            self.classification_cache[cache_key] = ensemble_result
-            
-            return ensemble_result
+            if not any(term in normalized_utterance for term in medical_terms):
+                return 0.8
         
-        # If all methods failed, use the LLM fallback
-        logger.warning("All classification methods failed, using LLM fallback")
-        fallback_result = await self.generate_llm_fallback(utterance, user_id)
-        
-        # Cache the fallback result too
-        self.classification_cache[cache_key] = fallback_result
-        
-        return fallback_result
-
+        # Default - low confidence in being out of scope
+        return 0.1
