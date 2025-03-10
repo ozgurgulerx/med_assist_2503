@@ -24,7 +24,8 @@ class DialogManager:
                 "transitions": {
                     "symptomReporting": "collecting_symptoms",
                     "ask_medical_info": "providing_info",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "collecting_symptoms": {
@@ -35,7 +36,8 @@ class DialogManager:
                     "deny": "generating_diagnosis",
                     "medicalInquiry": "providing_info",
                     "endConversation": "farewell",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "providing_info": {
@@ -45,7 +47,8 @@ class DialogManager:
                     "medicalInquiry": "providing_info",
                     "deny": "farewell",
                     "endConversation": "farewell",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "verification": {
@@ -56,7 +59,8 @@ class DialogManager:
                     "deny": "collecting_symptoms",
                     "symptomReporting": "collecting_symptoms",
                     "medicalInquiry": "providing_info",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "generating_diagnosis": {
@@ -65,7 +69,8 @@ class DialogManager:
                     "medicalInquiry": "providing_info",
                     "confirm": "farewell",
                     "endConversation": "farewell",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "farewell": {
@@ -73,7 +78,8 @@ class DialogManager:
                 "transitions": {
                     "symptomReporting": "collecting_symptoms",
                     "medicalInquiry": "providing_info",
-                    "out_of_scope": "out_of_scope_handler"
+                    "out_of_scope": "out_of_scope_handler",
+                    "emergency": "emergency"
                 }
             },
             "out_of_scope_handler": {
@@ -83,7 +89,19 @@ class DialogManager:
                     "medicalInquiry": "previous_state",
                     "confirm": "previous_state",
                     "deny": "previous_state",
-                    "endConversation": "previous_state"
+                    "endConversation": "previous_state",
+                    "emergency": "emergency"
+                }
+            },
+            "emergency": {
+                "next_actions": ["utter_emergency_instructions"],
+                "transitions": {
+                    # All intents lead back to emergency state - we don't continue normal conversation
+                    "symptomReporting": "emergency",
+                    "medicalInquiry": "emergency",
+                    "deny": "emergency",
+                    "endConversation": "emergency",
+                    "out_of_scope": "emergency"
                 }
             }
         }
@@ -209,20 +227,29 @@ class DialogManager:
         # Check if we have enough symptoms and confidence
         symptoms = patient_data.get("symptoms", [])
         confidence = patient_data.get("diagnosis", {}).get("confidence", 0.0)
-        question_count = len(patient_data.get("asked_questions", []))
+        
+        # Count only symptom-related questions that have been answered
+        asked_questions = patient_data.get("asked_questions", [])
+        answered_symptom_questions = [q for q in asked_questions 
+                                     if isinstance(q, dict) 
+                                     and q.get("is_symptom_related", False) 
+                                     and q.get("is_answered", True)]
+        symptom_question_count = len(answered_symptom_questions)
+        
+        logger.info(f"Found {symptom_question_count} answered symptom-related questions out of {len(asked_questions)} total questions")
 
         # Trigger verification in two cases:
         # 1. If confidence is >= 0.85 (high confidence case)
-        # 2. If we've asked at least 4 follow-up questions and confidence is still below 0.85 (low confidence case)
+        # 2. If we've asked at least 4 symptom-related follow-up questions and confidence is still below 0.85 (low confidence case)
         high_confidence_case = (len(symptoms) >= 1 and confidence >= 0.85)
-        low_confidence_case = (len(symptoms) >= 1 and question_count >= 4 and confidence < 0.85)
+        low_confidence_case = (len(symptoms) >= 1 and symptom_question_count >= 4 and confidence < 0.85)
         
         should_verify = high_confidence_case or low_confidence_case
 
         if should_verify:
             logger.info(
                 f"Transitioning to verification for user {user_id} "
-                f"(confidence: {confidence:.2f}, questions: {question_count}, "
+                f"(confidence: {confidence:.2f}, symptom questions: {symptom_question_count}, "
                 f"high_confidence_trigger: {high_confidence_case}, low_confidence_trigger: {low_confidence_case})"
             )
             # Store the verification trigger reason in patient data

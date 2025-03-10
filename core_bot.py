@@ -17,6 +17,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 import time
+from datetime import datetime
 
 # Semantic Kernel imports
 from semantic_kernel.contents.chat_history import ChatHistory
@@ -24,7 +25,7 @@ from semantic_kernel.contents.chat_history import ChatHistory
 # Local imports - our modular components
 from dialog_manager import DialogManager
 from llm_handler import LLMHandler
-from diagnostic_engine import DiagnosticEngine
+from diagnostic_engine import DiagnosticEngine, current_utc_timestamp
 from medical_plugins import MedicalKnowledgePlugin
 from intent_classifier import MedicalIntentClassifier as IntentClassificationService
 
@@ -254,6 +255,9 @@ Give helpful, accurate information while emphasizing this is general advice and 
         elif action_name == "action_handle_out_of_scope":
             return await self.action_handle_out_of_scope(user_id)
         
+        elif action_name == "utter_emergency_instructions":
+            return await self.utter_emergency_instructions(user_id)
+        
         else:
             logger.warning(f"Unknown action: {action_name}")
             return "I'm not sure how to respond to that."
@@ -298,58 +302,50 @@ Give helpful, accurate information while emphasizing this is general advice and 
             redirect_message += "Let's continue with your diagnosis. "
         else:
             # Default redirection for other states
-            redirect_message = "I understand you're asking about something outside the medical domain. "
-            redirect_message += "However, I'm designed to assist with medical concerns. Could we return to discussing your health questions? "
+            redirect_message = "I understand, but I'm designed to assist with medical concerns. "
+            redirect_message += "Could we return to discussing your health concerns? "
         
         # Add a gentle reminder about the bot's purpose
         redirect_message += "As a medical assistant, I'm here to help with health-related questions and concerns."
         
         return redirect_message
     
-    async def _generate_user_context(self, history: ChatHistory) -> Dict[str, Any]:
+    async def utter_emergency_instructions(self, user_id: str) -> str:
         """
-        Generate a summarized user context from conversation history.
+        Provide emergency instructions to the user.
+        This is used when the system has detected a potential medical emergency.
         
         Args:
-            history: The chat history.
-                
+            user_id: The user's identifier
+            
         Returns:
-            Dictionary with context text and model info.
+            Emergency instructions message
         """
-        # Removed llm availability check; always try the prompt
-        if len(history.messages) < 3:
-            return {
-                "text": "No context generated",
-                "model": "none",
-                "deployment": "none"
-            }
+        user_data = self.get_user_data(user_id)
+        patient_data = user_data.get("patient_data", {})
+        emergency_info = patient_data.get("emergency_info", {})
         
-        try:
-            # Convert history to text format
-            history_text = ""
-            for msg in history.messages:
-                role = "User" if msg.role.lower() == "user" else "Assistant"
-                history_text += f"{role}: {msg.content}\n"
-            
-            # Create a prompt for context generation
-            prompt = f"""Based on the following conversation history, create a brief summary of the user's context, 
-including key health concerns, symptoms mentioned, and relevant details.
-
-CONVERSATION HISTORY:
-{history_text}
-
-Provide a concise (2-3 sentence) summary of this user's context.
-"""
-            
-            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
-            return response_data
-        except Exception as e:
-            logger.error(f"Error generating user context: {str(e)}")
-            return {
-                "text": "Context generation failed",
-                "model": "error",
-                "deployment": "none"
-            }
+        # Get the emergency reasoning if available
+        reasoning = emergency_info.get("reasoning", "potentially life-threatening symptoms")
+        
+        message = (
+            "⚠️ MEDICAL EMERGENCY DETECTED ⚠️\n\n"
+            "Based on the symptoms you've described, you may be experiencing a medical emergency. "
+            f"This is due to {reasoning}.\n\n"
+            "Please take the following actions immediately:\n"
+            "1. Call emergency services (911 in the US) or your local emergency number\n"
+            "2. If you cannot call, have someone nearby call for you\n"
+            "3. Go to the nearest emergency room if you can safely do so\n\n"
+            "Do not wait for symptoms to improve on their own. "
+            "This is not a substitute for professional medical care.\n\n"
+            "I cannot continue with normal symptom assessment during a potential emergency."
+        )
+        
+        # Add to chat history
+        history = self.get_chat_history(user_id)
+        history.add_assistant_message(message)
+        
+        return message
 
     def _generate_diagnostic_info(self, user_id: str, patient_data: Dict[str, Any], intent: str, user_context: Dict[str, Any], model_info: Dict[str, str]) -> str:
         """
@@ -554,6 +550,16 @@ Provide a concise (2-3 sentence) summary of this user's context.
         logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
         logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
         
+        # If the message is out-of-scope, mark the most recent question as not symptom-related
+        if top_intent == "out_of_scope":
+            asked_questions = patient_data.get("asked_questions", [])
+            if asked_questions:
+                # Get the most recent question
+                last_question = asked_questions[-1]
+                if isinstance(last_question, dict) and not last_question.get("is_answered", False):
+                    last_question["is_symptom_related"] = False
+                    logger.info(f"Marked question '{last_question['question']}' as not symptom-related due to out-of-scope response")
+        
         # If the user is informing symptoms, extract and add them
         if top_intent == "inform_symptoms" or top_intent == "symptomReporting":
             # Extract just the symptom part from the message
@@ -588,9 +594,38 @@ Provide a concise (2-3 sentence) summary of this user's context.
             if symptom_text:
                 logger.info(f"Adding symptom: '{symptom_text}' to patient data")
                 self.diagnostic_engine.add_symptom(patient_data, symptom_text)
+                
+                # Mark the most recent question as answered if it was symptom-related
+                asked_questions = patient_data.get("asked_questions", [])
+                if asked_questions:
+                    # Get the most recent question
+                    last_question = asked_questions[-1]
+                    if isinstance(last_question, dict) and last_question.get("is_symptom_related", False):
+                        last_question["answer"] = message
+                        last_question["timestamp_answered"] = current_utc_timestamp()
+                        last_question["is_answered"] = True
+                        logger.info(f"Marked question '{last_question['question']}' as answered")
+                
                 await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
                 logger.info(f"After adding symptom, patient data symptoms: {patient_data.get('symptoms', [])}")
                 logger.info(f"Diagnosis confidence updated to: {patient_data.get('diagnosis', {}).get('confidence', 0.0)}")
+                
+                # Check for emergency situations
+                emergency_result = await self.diagnostic_engine.detect_emergency(patient_data)
+                if emergency_result.get("is_emergency", False):
+                    # If emergency is detected, immediately respond with emergency message
+                    emergency_message = emergency_result.get("emergency_message")
+                    logger.warning(f"EMERGENCY DETECTED - Responding with: {emergency_message}")
+                    
+                    # Add bot message to history
+                    history.add_assistant_message(emergency_message)
+                    
+                    # Set a special emergency state
+                    self.dialog_manager.set_user_state(user_id, "emergency")
+                    
+                    # Return the emergency message immediately
+                    return emergency_message
+                
                 # Possibly move to verification if confidence is high enough
                 if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
                     logger.info("Confidence threshold reached, transitioning to verification")
@@ -629,6 +664,51 @@ Provide a concise (2-3 sentence) summary of this user's context.
             return enhanced_response
         else:
             return full_response
+
+    async def _generate_user_context(self, history: ChatHistory) -> Dict[str, Any]:
+        """
+        Generate a summarized user context from conversation history.
+        
+        Args:
+            history: The chat history.
+                
+        Returns:
+            Dictionary with context text and model info.
+        """
+        # Removed llm availability check; always try the prompt
+        if len(history.messages) < 3:
+            return {
+                "text": "No context generated",
+                "model": "none",
+                "deployment": "none"
+            }
+        
+        try:
+            # Convert history to text format
+            history_text = ""
+            for msg in history.messages:
+                role = "User" if msg.role.lower() == "user" else "Assistant"
+                history_text += f"{role}: {msg.content}\n"
+            
+            # Create a prompt for context generation
+            prompt = f"""Based on the following conversation history, create a brief summary of the user's context, 
+including key health concerns, symptoms mentioned, and relevant details.
+
+CONVERSATION HISTORY:
+{history_text}
+
+Provide a concise (2-3 sentence) summary of this user's context.
+"""
+            
+            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
+            return response_data
+        except Exception as e:
+            logger.error(f"Error generating user context: {str(e)}")
+            return {
+                "text": "Context generation failed",
+                "model": "error",
+                "deployment": "none"
+            }
 
 # External functions for API and CLI interfaces
 _bot_instances = {}

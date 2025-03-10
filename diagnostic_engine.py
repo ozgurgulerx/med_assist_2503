@@ -285,12 +285,14 @@ Format: Return ONLY the question, without any prefixes or additional text."""
         else:
             logger.info("LLM not available, using fallback question text.")
         
-        # Record it in asked_questions with timestamps
+        # Record it in asked_questions with timestamps and mark as symptom-related
         asked_dict = {
             "question": question_text,
             "answer": "",
             "timestamp_asked": current_utc_timestamp(),
-            "timestamp_answered": ""
+            "timestamp_answered": "",
+            "is_symptom_related": True,
+            "is_answered": False
         }
         asked_list.append(asked_dict)
         
@@ -418,3 +420,97 @@ Suggest general care or mitigations, emphasizing this is not a substitute for pr
                 logger.error(f"Error generating mitigations: {e}")
         
         return ("Here's a general suggestion: get rest, stay hydrated, track any changes in symptoms, and follow up with a healthcare provider if needed.")
+    
+    async def detect_emergency(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Analyze symptoms to detect potential emergency medical situations that require immediate attention.
+        
+        Args:
+            patient_data: The patient data including symptoms
+            
+        Returns:
+            Dictionary with 'is_emergency' boolean and 'emergency_message' string if it's an emergency
+        """
+        symptoms_str = self.get_symptoms_text(patient_data)
+        if not symptoms_str or symptoms_str == "unknown symptoms":
+            return {"is_emergency": False}
+        
+        logger.info(f"Checking for emergency in symptoms: '{symptoms_str}'")
+        
+        if not self.llm_handler.is_available():
+            # Fallback emergency detection for critical keywords
+            emergency_keywords = [
+                "can't breathe", "cannot breathe", "difficulty breathing", "severe chest pain",
+                "heart attack", "stroke", "seizure", "unconscious", "unresponsive",
+                "severe bleeding", "coughing blood", "vomiting blood", "suicidal",
+                "overdose", "poisoning", "anaphylaxis", "allergic reaction"
+            ]
+            
+            for keyword in emergency_keywords:
+                if keyword in symptoms_str.lower():
+                    return {
+                        "is_emergency": True,
+                        "emergency_message": f"I've detected potential emergency symptoms related to {keyword}. "
+                                             f"Please seek immediate medical attention by calling emergency services or going to the nearest emergency room."
+                    }
+            
+            return {"is_emergency": False}
+        
+        # Use LLM to detect emergency situations
+        prompt = f"""Analyze these symptoms to determine if they represent a medical emergency requiring immediate attention:
+
+Symptoms: {symptoms_str}
+
+A medical emergency is a situation that poses an immediate risk to a person's health, life, or long-term function and requires urgent intervention.
+Examples include: heart attack, stroke, severe bleeding, difficulty breathing, severe allergic reactions, etc.
+
+Respond with a JSON object:
+{{
+"is_emergency": true/false,
+"reasoning": "brief explanation of why this is or is not an emergency",
+"emergency_message": "If this is an emergency, provide a clear message advising the patient to seek immediate medical attention"
+}}
+"""
+        
+        try:
+            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True, temperature=0.1)
+            response_text = response_data.get("text", "")
+            
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group(0))
+                    is_emergency = result.get("is_emergency", False)
+                    
+                    if is_emergency:
+                        # Store emergency information in patient data
+                        if "emergency_info" not in patient_data:
+                            patient_data["emergency_info"] = {}
+                        
+                        patient_data["emergency_info"] = {
+                            "detected_at": current_utc_timestamp(),
+                            "reasoning": result.get("reasoning", "No reasoning provided"),
+                            "symptoms": symptoms_str
+                        }
+                        
+                        logger.warning(f"EMERGENCY DETECTED: {result.get('reasoning', 'No reasoning provided')}")
+                        
+                        return {
+                            "is_emergency": True,
+                            "emergency_message": result.get("emergency_message", 
+                                                        "MEDICAL EMERGENCY DETECTED. Please seek immediate medical attention "
+                                                        "by calling emergency services or going to the nearest emergency room.")
+                        }
+                    else:
+                        logger.info(f"No emergency detected in symptoms: '{symptoms_str}'")
+                        return {"is_emergency": False}
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing emergency detection JSON: {e}")
+            
+            logger.warning("Failed to parse emergency detection response")
+            return {"is_emergency": False}
+            
+        except Exception as e:
+            logger.error(f"Error in emergency detection: {str(e)}")
+            return {"is_emergency": False}
