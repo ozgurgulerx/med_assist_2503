@@ -16,6 +16,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
+import time
 
 # Semantic Kernel imports
 from semantic_kernel.contents.chat_history import ChatHistory
@@ -316,6 +317,17 @@ Provide a concise (2-3 sentence) summary of this user's context.
         # Get current dialog state
         current_state = self.dialog_manager.get_user_state(user_id)
         
+        # Get current date and time for the report
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Get patient demographics
+        demographics = patient_data.get("demographics", {})
+        patient_name = demographics.get("name", "[Patient Name]")
+        patient_age = demographics.get("age", "[Age]")
+        patient_gender = demographics.get("gender", "[Gender]")
+        patient_height = demographics.get("height", "[Height]")
+        patient_weight = demographics.get("weight", "[Weight]")
+        
         # Handle symptoms display - support both string and dict formats
         symptom_objs = patient_data.get("symptoms", [])
         if symptom_objs:
@@ -325,44 +337,104 @@ Provide a concise (2-3 sentence) summary of this user's context.
                     symptom_text = s.get("name", "unknown")
                     if "additional_info" in s:
                         symptom_text += f" ({s['additional_info']})"
+                    if "timestamp" in s:
+                        symptom_text += f" - reported {s['timestamp']}"
                 else:
                     symptom_text = str(s)
-                symptom_texts.append(symptom_text)
-            symptoms_text = ", ".join(symptom_texts)
+                symptom_texts.append(f"• {symptom_text}")
+            symptoms_text = "\n".join(symptom_texts)
         else:
-            symptoms_text = "None recorded"
+            symptoms_text = "No symptoms reported"
         
+        # Get diagnosis information
         diagnosis_info = patient_data.get("diagnosis", {})
+        diagnosis_name = diagnosis_info.get("name", "Pending diagnosis")
         confidence = diagnosis_info.get("confidence", 0.0)
         confidence_text = f"{confidence:.2f} ({confidence * 100:.1f}%)"
         
         # Additional reasoning or placeholders
-        confidence_reasoning = patient_data.get("confidence_reasoning", "No reasoning available")
+        confidence_reasoning = patient_data.get("confidence_reasoning", "Assessment pending")
         
-        # Extract model information
-        context_model = f"{user_context.get('model', 'unknown')}/{user_context.get('deployment', 'unknown')}"
-        response_model = f"{model_info.get('model', 'unknown')}/{model_info.get('deployment', 'unknown')}"
+        # Get additional medical information
+        asked_questions = patient_data.get("asked_questions", [])
+        followup_count = len(asked_questions)
         
-        # Extract specialized model information
-        diagnosis_model = patient_data.get("diagnosis_model", "Not yet used")
-        verification_model = patient_data.get("verification_model", "Not yet used")
+        # Format the questions as a medical assessment
+        assessment_notes = []
+        if asked_questions:
+            for q in asked_questions:
+                assessment_notes.append(f"• {q}")
+            assessment_text = "\n".join(assessment_notes)
+        else:
+            assessment_text = "Initial assessment in progress"
         
+        # Generate recommendations based on the diagnosis state
+        if diagnosis_name != "Pending diagnosis" and confidence >= 0.6:
+            recommendations = "Based on the assessment, the following is recommended:\n"
+            recommendations += "• Consult with a healthcare professional for confirmation\n"
+            recommendations += "• Monitor symptoms and seek immediate care if condition worsens\n"
+            recommendations += "• Follow standard treatment protocols for the identified condition"
+        else:
+            recommendations = "Recommendations pending completion of assessment"
+        
+        # Extract model information for technical appendix
+        context_model = f"{user_context.get('model', 'standard')}/{user_context.get('deployment', 'primary')}"
+        response_model = f"{model_info.get('model', 'standard')}/{model_info.get('deployment', 'primary')}"
+        diagnosis_model = patient_data.get("diagnosis_model", "Standard diagnostic protocol")
+        verification_model = patient_data.get("verification_model", "Pending verification")
+        
+        # Format the report with medical styling
         diagnostic_info = f"""
-    --------- DIAGNOSTIC INFORMATION ---------
-    User Context: {user_context.get('text', 'None')}
-    Current State: {current_state}
-    Last Intent: {intent}
-    Symptoms: {symptoms_text}
-    Diagnosis: {diagnosis_info.get("name", None)}
-    Diagnosis Confidence: {confidence_text}
-    Confidence Reasoning: {confidence_reasoning}
-
-    Models Used:
-    - Context Generation: {context_model}
-    - Response Generation: {response_model}
-    - Diagnosis: {diagnosis_model}
-    - Verification: {verification_model}
-    ----------------------------------------
+    ==========================================
+    MEDICAL ASSESSMENT REPORT
+    ==========================================
+    Date: {current_time}
+    Report ID: {user_id[:8] if len(user_id) > 8 else user_id}-{int(time.time()) % 10000}
+    Assessment Status: {current_state.replace('_', ' ').title()}
+    
+    ------------------------------------------
+    PATIENT INFORMATION
+    ------------------------------------------
+    Name: {patient_name}
+    Age: {patient_age}
+    Gender: {patient_gender}
+    Height: {patient_height}
+    Weight: {patient_weight}
+    
+    ------------------------------------------
+    PRESENTING SYMPTOMS
+    ------------------------------------------
+    {symptoms_text}
+    
+    ------------------------------------------
+    ASSESSMENT NOTES
+    ------------------------------------------
+    {assessment_text}
+    
+    ------------------------------------------
+    DIAGNOSTIC IMPRESSION
+    ------------------------------------------
+    Preliminary Diagnosis: {diagnosis_name}
+    Diagnostic Confidence: {confidence_text}
+    Assessment Basis: {confidence_reasoning}
+    
+    ------------------------------------------
+    RECOMMENDATIONS
+    ------------------------------------------
+    {recommendations}
+    
+    ------------------------------------------
+    TECHNICAL APPENDIX
+    ------------------------------------------
+    Analysis Protocol: {context_model}
+    Diagnostic Protocol: {diagnosis_model}
+    Verification Status: {verification_model}
+    
+    DISCLAIMER: This is an automated preliminary assessment.
+    It is not a substitute for professional medical advice,
+    diagnosis, or treatment. Always seek the advice of your
+    physician or other qualified health provider.
+    ==========================================
     """
         return diagnostic_info
         

@@ -179,16 +179,24 @@ class DialogManager:
         confidence = patient_data.get("diagnosis", {}).get("confidence", 0.0)
         question_count = len(patient_data.get("asked_questions", []))
 
-        # Need at least 1 symptom and either:
-        # - >= 0.85 confidence, or
-        # - >= 3 rounds of follow-up
-        should_verify = (len(symptoms) >= 1 and (confidence >= 0.85 or question_count >= 3))
+        # Trigger verification in two cases:
+        # 1. If confidence is >= 0.85 (high confidence case)
+        # 2. If we've asked at least 4 follow-up questions and confidence is still below 0.85 (low confidence case)
+        high_confidence_case = (len(symptoms) >= 1 and confidence >= 0.85)
+        low_confidence_case = (len(symptoms) >= 1 and question_count >= 4 and confidence < 0.85)
+        
+        should_verify = high_confidence_case or low_confidence_case
 
         if should_verify:
             logger.info(
                 f"Transitioning to verification for user {user_id} "
-                f"(confidence: {confidence:.2f}, questions: {question_count})"
+                f"(confidence: {confidence:.2f}, questions: {question_count}, "
+                f"high_confidence_trigger: {high_confidence_case}, low_confidence_trigger: {low_confidence_case})"
             )
+            # Store the verification trigger reason in patient data
+            if "verification_info" not in patient_data:
+                patient_data["verification_info"] = {}
+            patient_data["verification_info"]["trigger_reason"] = "high_confidence" if high_confidence_case else "low_confidence"
             self.set_user_state(user_id, "verification")
 
         return should_verify
