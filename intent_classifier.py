@@ -166,34 +166,11 @@ class MedicalIntentClassifier:
         # Load environment variables
         load_dotenv()
         
-        # Create a dedicated kernel and chat service for intent classification if not provided
-        if kernel is None:
-            self.kernel = Kernel()
-            self.is_dedicated_kernel = True
-        else:
-            self.kernel = kernel
-            self.is_dedicated_kernel = False
-            
-        # Create a dedicated Azure OpenAI client for intent classification if not provided
-        if chat_service is None:
-            try:
-                self.chat_service = AzureChatCompletion(
-                    deployment_name="gpt-4o",
-                    endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-                    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                    api_version="2024-06-01"
-                )
-                self.kernel.add_service(self.chat_service)
-                logger.info("Created Azure OpenAI service for intent classification")
-                self.is_dedicated_service = True
-            except Exception as e:
-                logger.error(f"Failed to initialize Azure OpenAI service for intent classification: {str(e)}")
-                logger.warning("Intent classifier will use fallbacks only")
-                self.chat_service = None
-                self.is_dedicated_service = False
-        else:
-            self.chat_service = chat_service
-            self.is_dedicated_service = False
+        # Store initialization parameters for lazy loading
+        self._chat_service = chat_service
+        self._kernel = kernel
+        self._is_initialized = False
+        self._initialization_lock = asyncio.Lock()
         
         # Define updated intent options (no spaces/special chars):
         self.intent_options = [
@@ -237,6 +214,57 @@ class MedicalIntentClassifier:
         
         # Initialize previous questions cache to detect follow-up responses
         self.previous_questions = {}
+        
+        # Pre-populate cache with common greetings for instant response
+        common_greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
+        for greeting in common_greetings:
+            self.classification_cache[f"default_user:{greeting}"] = {"greeting": 0.95, "smallTalk": 0.05}
+            
+        logger.info("Intent classifier initialized with lazy loading")
+
+    async def _ensure_initialized(self):
+        """Ensure that the LLM services are initialized before use (lazy initialization)"""
+        if self._is_initialized:
+            return
+            
+        async with self._initialization_lock:
+            # Check again in case another task initialized while we were waiting
+            if self._is_initialized:
+                return
+                
+            logger.info("Lazily initializing LLM services for intent classification")
+            
+            # Create a dedicated kernel for intent classification if not provided
+            if self._kernel is None:
+                self.kernel = Kernel()
+                self.is_dedicated_kernel = True
+            else:
+                self.kernel = self._kernel
+                self.is_dedicated_kernel = False
+                
+            # Create a dedicated Azure OpenAI client for intent classification if not provided
+            if self._chat_service is None:
+                try:
+                    self.chat_service = AzureChatCompletion(
+                        deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
+                        endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                        api_version="2024-06-01"
+                    )
+                    self.kernel.add_service(self.chat_service)
+                    logger.info("Created Azure OpenAI service for intent classification")
+                    self.is_dedicated_service = True
+                except Exception as e:
+                    logger.error(f"Failed to initialize Azure OpenAI service for intent classification: {str(e)}")
+                    logger.warning("Intent classifier will use fallbacks only")
+                    self.chat_service = None
+                    self.is_dedicated_service = False
+            else:
+                self.chat_service = self._chat_service
+                self.is_dedicated_service = False
+                
+            self._is_initialized = True
+            logger.info("LLM services for intent classification initialized successfully")
     
     def add_to_conversation_history(self, user_id: str, message: str, role: str = "user") -> None:
         """
@@ -311,7 +339,10 @@ class MedicalIntentClassifier:
         Returns:
             Confidence score for implied symptom detection.
         """
-        if not self.chat_service:
+        # Ensure LLM services are initialized
+        await self._ensure_initialized()
+        
+        if not hasattr(self, 'chat_service') or self.chat_service is None:
             return None
         
         # Skip this analysis for very short responses to avoid unnecessary API calls
@@ -387,8 +418,11 @@ Respond with a JSON object:
         Returns:
             Dictionary of intent names and confidence scores.
         """
-        if not self.chat_service:
-            return None
+        # Ensure LLM services are initialized
+        await self._ensure_initialized()
+        
+        if not hasattr(self, 'chat_service') or self.chat_service is None:
+            return {}
         
         # Get dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
@@ -488,7 +522,7 @@ Respond with a JSON object:
     
     async def classify_with_medical_knowledge(self, utterance: str) -> Optional[Dict[str, float]]:
         """
-        Classify intent with focus on medical terminology and health expressions.
+        Classify intent using medical knowledge and terminology.
         
         Args:
             utterance: The user's message.
@@ -496,8 +530,11 @@ Respond with a JSON object:
         Returns:
             Dictionary of intent names and confidence scores.
         """
-        if not self.chat_service:
-            return None
+        # Ensure LLM services are initialized
+        await self._ensure_initialized()
+        
+        if not hasattr(self, 'chat_service') or self.chat_service is None:
+            return {}
         
         # Updated categories
         prompt = f"""As a medical professional, analyze this patient message to determine its intent:
@@ -583,22 +620,25 @@ Respond with a JSON object:
     
     async def generate_llm_fallback(self, utterance: str, user_id: str) -> Dict[str, float]:
         """
-        Generate a fallback intent classification using LLM with minimal context
-        when other methods fail.
+        Generate a fallback classification using direct LLM prompt.
         
         Args:
             utterance: The user's message.
             user_id: The user's identifier.
             
         Returns:
-            Dictionary of intent scores based on LLM fallback.
+            Dictionary of intent names and confidence scores.
         """
-        if not self.chat_service:
-            # Last resort emergency fallback
-            scores = {intent: 0.1 for intent in self.intent_options}
-            scores["symptomReporting"] = 0.6  # Slight bias toward symptom detection in medical context
-            return scores
-            
+        # Ensure LLM services are initialized
+        await self._ensure_initialized()
+        
+        if not hasattr(self, 'chat_service') or self.chat_service is None:
+            # If no LLM service is available, return a basic classification
+            if len(utterance.split()) <= 3:
+                return {"greeting": 0.7, "smallTalk": 0.3}
+            else:
+                return {"out_of_scope": 0.8, "smallTalk": 0.2}
+        
         # Get minimal dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
         
@@ -783,6 +823,15 @@ Respond with a JSON object:
         if cache_key in self.classification_cache:
             return self.classification_cache[cache_key]
         
+        # Fast path for common greetings
+        normalized_utterance = utterance.lower().strip().rstrip('.!?')
+        common_greetings = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening"]
+        if normalized_utterance in common_greetings or normalized_utterance.startswith("hello ") or normalized_utterance.startswith("hi "):
+            logger.info(f"Fast path: Detected greeting message: '{utterance}'")
+            result = {"greeting": 0.95, "smallTalk": 0.05}
+            self.classification_cache[cache_key] = result
+            return result
+        
         # First, check if this is an out-of-scope message
         out_of_scope_confidence = self.detect_out_of_scope(utterance)
         if out_of_scope_confidence > 0.7:  # High confidence threshold for out-of-scope
@@ -790,6 +839,9 @@ Respond with a JSON object:
             result = {"out_of_scope": out_of_scope_confidence}
             self.classification_cache[cache_key] = result
             return result
+        
+        # For non-greeting messages, ensure LLM services are initialized
+        await self._ensure_initialized()
         
         # Get dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
