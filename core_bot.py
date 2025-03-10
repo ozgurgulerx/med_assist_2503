@@ -522,7 +522,7 @@ Give helpful, accurate information while emphasizing this is general advice and 
     """
         return diagnostic_info
         
-    async def process_message(self, user_id: str, message: str, include_diagnostics: bool = True) -> str:
+    async def process_message(self, user_id: str, message: str, include_diagnostics: bool = False) -> str:
         """
         Process a user message and return the response with diagnostic information.
         
@@ -725,7 +725,7 @@ Provide a concise (2-3 sentence) summary of this user's context.
 # External functions for API and CLI interfaces
 _bot_instances = {}
 
-async def process_message_api(message: str, user_id: str = None, include_diagnostics: bool = True) -> str:
+async def process_message_api(message: str, user_id: str = None, include_diagnostics: bool = False) -> str:
     """
     Process a single message from an API request and return the response with diagnostic information.
     
@@ -768,7 +768,7 @@ async def interactive_conversation():
     bot = MedicalAssistantBot()
     user_id = "interactive_user"
     
-    include_diagnostics = True
+    include_diagnostics = False
     
     print("\n----- Starting Interactive Medical Assistant Conversation -----")
     print("Type your messages and press Enter.")

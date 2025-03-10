@@ -57,7 +57,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     user_id: Optional[str] = None
-    include_diagnostics: bool = True  # Option to toggle diagnostic info
+    include_diagnostics: bool = False  # Option to toggle diagnostic info
 
 # Global bot instances cache
 bot_instances: Dict[str, MedicalAssistantBot] = {}
