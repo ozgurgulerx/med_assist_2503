@@ -19,7 +19,7 @@ from dialog_manager import DialogManager
 from llm_handler import LLMHandler
 from diagnostic_engine import DiagnosticEngine
 from medical_plugins import MedicalKnowledgePlugin
-from intent_classifier import IntentClassificationService
+from intent_classifier import MedicalIntentClassifier as IntentClassificationService
 
 # Load environment variables
 load_dotenv()
