@@ -23,6 +23,9 @@ class LLMHandler:
         """Initialize the LLM handler using Semantic Kernel."""
         # Create a Kernel instance
         self.kernel = Kernel()
+        
+        # Ensure `services` dictionary exists in `Kernel`
+        self.kernel.services = {}
 
         # Configure execution settings
         self.execution_settings = AzureChatPromptExecutionSettings()
@@ -42,10 +45,6 @@ class LLMHandler:
                 api_version="2024-06-01"
             )
 
-            # Corrected: Use only 2 arguments (service + service_id)
-            self.kernel.add_service(mini_service, service_id="mini")
-            logger.info("Registered 'mini' chat service with deployment: gpt-4o-mini")
-
             # "full" model for advanced usage
             full_service = AzureChatCompletion(
                 deployment_name="gpt-4o",
@@ -54,8 +53,13 @@ class LLMHandler:
                 api_version="2024-06-01"
             )
 
-            self.kernel.add_service(full_service, service_id="full")
-            logger.info("Registered 'full' chat service with deployment: gpt-4o")
+            # Manually store chat services
+            self.kernel.services["chat"] = {
+                "mini": mini_service,
+                "full": full_service
+            }
+            
+            logger.info("Registered 'mini' and 'full' chat services.")
 
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")
@@ -63,11 +67,11 @@ class LLMHandler:
 
     def is_available(self) -> bool:
         """Check if the 'mini' LLM service is available"""
-        return self.kernel.has_service("mini")
+        return "chat" in self.kernel.services and "mini" in self.kernel.services["chat"]
 
     def is_full_model_available(self) -> bool:
         """Check if the 'full' LLM service is available"""
-        return self.kernel.has_service("full")
+        return "chat" in self.kernel.services and "full" in self.kernel.services["chat"]
 
     async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
@@ -82,7 +86,7 @@ class LLMHandler:
             A dictionary containing response text, model, and endpoint details.
         """
         service_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
-        service = self.kernel.get_service(service_id)
+        service = self.kernel.services["chat"].get(service_id)
 
         if not service:
             return {
