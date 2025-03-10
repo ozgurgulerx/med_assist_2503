@@ -143,7 +143,7 @@ class DiagnosticEngine:
         Returns:
             Dictionary with confidence score and reasoning
         """
-        if not self.is_available():
+        if not self.llm_handler.is_available():  # Check the LLM handler, not self
             return {
                 "confidence": 0.3,
                 "reasoning": "Limited confidence due to unavailable LLM service"
@@ -174,7 +174,7 @@ class DiagnosticEngine:
     }}
     """
             # Use mini model to save costs
-            response_data = await self.execute_prompt(prompt, use_full_model=False, temperature=0.3)
+            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False, temperature=0.3)  # Call the LLMHandler's method
             response_text = response_data.get("text", "")
             
             # Extract the JSON
@@ -210,7 +210,7 @@ class DiagnosticEngine:
                 "confidence": 0.2,
                 "reasoning": f"Error in confidence calculation: {str(e)}"
             }
-
+    
 
     async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
         """
@@ -242,7 +242,7 @@ class DiagnosticEngine:
             return
         
         # Otherwise, use the LLM to calculate confidence
-        confidence_data = await self.llm_handler.calculate_diagnosis_confidence(symptoms)
+        confidence_data = await self.calculate_diagnosis_confidence(symptoms)  # Call local method instead
         
         # Extract confidence and reasoning
         confidence = confidence_data.get("confidence", 0.0)
