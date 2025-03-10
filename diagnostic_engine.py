@@ -132,7 +132,86 @@ class DiagnosticEngine:
         if not questions:
             return ""
         return ", ".join(questions)
-    
+
+    async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
+        """
+        Calculate confidence in diagnosis based on provided symptoms using LLM.
+        
+        Args:
+            symptoms: The symptoms text to analyze
+            
+        Returns:
+            Dictionary with confidence score and reasoning
+        """
+        if not self.is_available():
+            return {
+                "confidence": 0.3,
+                "reasoning": "Limited confidence due to unavailable LLM service"
+            }
+        
+        try:
+            prompt = f"""Analyze these symptoms to assess how confident a medical professional would be in providing a diagnosis:
+
+    Symptoms: {symptoms}
+
+    Consider factors like:
+    - Specificity of symptoms described
+    - Whether duration and severity are mentioned
+    - Presence of characteristic patterns
+    - Whether symptoms could match multiple conditions
+
+    Respond with a confidence score between 0.0 and 1.0 where:
+    - 0.1-0.3: Very low confidence (vague symptoms, minimal details)
+    - 0.3-0.5: Low confidence (some details but ambiguous presentation)
+    - 0.5-0.7: Moderate confidence (specific symptoms with some context)
+    - 0.7-0.9: High confidence (detailed, specific symptoms with context)
+    - 0.9+: Very high confidence (detailed symptoms forming a clear pattern)
+
+    Return a JSON object:
+    {{
+    "confidence": 0.7,
+    "reasoning": "Brief explanation of the confidence score"
+    }}
+    """
+            # Use mini model to save costs
+            response_data = await self.execute_prompt(prompt, use_full_model=False, temperature=0.3)
+            response_text = response_data.get("text", "")
+            
+            # Extract the JSON
+            import re
+            import json
+            
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group(0))
+                    confidence = float(result.get("confidence", 0.3))
+                    # Ensure confidence is within valid range
+                    confidence = max(0.0, min(1.0, confidence))
+                    
+                    return {
+                        "confidence": confidence,
+                        "reasoning": result.get("reasoning", "No reasoning provided")
+                    }
+                except (json.JSONDecodeError, ValueError):
+                    return {
+                        "confidence": 0.3,
+                        "reasoning": "Error parsing confidence calculation"
+                    }
+            
+            return {
+                "confidence": 0.3,
+                "reasoning": "Could not calculate confidence from LLM response"
+            }
+        
+        except Exception as e:
+            logger.error(f"Error calculating diagnosis confidence: {str(e)}")
+            return {
+                "confidence": 0.2,
+                "reasoning": f"Error in confidence calculation: {str(e)}"
+            }
+
+
     async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
         """
         Update diagnosis confidence for patient data
