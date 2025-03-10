@@ -316,11 +316,19 @@ Provide a concise (2-3 sentence) summary of this user's context.
         # Get current dialog state
         current_state = self.dialog_manager.get_user_state(user_id)
         
-        # Some type of "symptoms" can be either an array of symptom objects
-        # We'll just display the names for simplicity
+        # Handle symptoms display - support both string and dict formats
         symptom_objs = patient_data.get("symptoms", [])
         if symptom_objs:
-            symptoms_text = ", ".join(s.get("name", "unknown") for s in symptom_objs)
+            symptom_texts = []
+            for s in symptom_objs:
+                if isinstance(s, dict):
+                    symptom_text = s.get("name", "unknown")
+                    if "additional_info" in s:
+                        symptom_text += f" ({s['additional_info']})"
+                else:
+                    symptom_text = str(s)
+                symptom_texts.append(symptom_text)
+            symptoms_text = ", ".join(symptom_texts)
         else:
             symptoms_text = "None recorded"
         
@@ -398,16 +406,49 @@ Provide a concise (2-3 sentence) summary of this user's context.
         logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
         logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
         
-        # If the user is informing symptoms, add them in a naive way
-        if top_intent == "inform_symptoms":
-            self.diagnostic_engine.add_symptom(patient_data, message)
-            await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
-            # Possibly move to verification if confidence is high enough
-            if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
-                logger.info("Confidence threshold reached, transitioning to verification")
+        # If the user is informing symptoms, extract and add them
+        if top_intent == "inform_symptoms" or top_intent == "symptomReporting":
+            # Extract just the symptom part from the message
+            # For now, we'll use a simple approach - the first symptom-like phrase
+            symptom_text = message.lower()
+            # Remove common prefixes that aren't part of the symptom
+            prefixes_to_remove = [
+                "i have ", "i've got ", "i am having ", "i'm having ",
+                "i feel ", "i'm feeling ", "i am feeling ",
+                "i got ", "i've been having ", "experiencing ",
+                "suffering from ", "dealing with "
+            ]
+            for prefix in prefixes_to_remove:
+                if symptom_text.startswith(prefix):
+                    symptom_text = symptom_text[len(prefix):]
+                    break
+            
+            # Remove common suffixes that aren't part of the symptom
+            suffixes_to_remove = [
+                " lately", " recently", " for a while", " since yesterday",
+                " since last week", " for the past", " for a few days"
+            ]
+            for suffix in suffixes_to_remove:
+                if symptom_text.endswith(suffix):
+                    symptom_text = symptom_text[:-len(suffix)]
+                    break
+            
+            # Clean up any remaining punctuation
+            symptom_text = symptom_text.strip('.,!? \t\n')
+            
+            # Only add if we have a non-empty symptom
+            if symptom_text:
+                logger.info(f"Adding symptom: '{symptom_text}' to patient data")
+                self.diagnostic_engine.add_symptom(patient_data, symptom_text)
+                await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
+                logger.info(f"After adding symptom, patient data symptoms: {patient_data.get('symptoms', [])}")
+                logger.info(f"Diagnosis confidence updated to: {patient_data.get('diagnosis', {}).get('confidence', 0.0)}")
+                # Possibly move to verification if confidence is high enough
+                if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
+                    logger.info("Confidence threshold reached, transitioning to verification")
         
         # Determine next state based on current state and intent
-        next_state = self.dialog_manager.get_next_state(user_id, top_intent)
+        next_state = self.dialog_manager.advance_dialog_state(user_id, top_intent)
         
         # Get the next actions to execute
         next_actions = self.dialog_manager.get_next_actions(next_state)
@@ -562,4 +603,3 @@ async def interactive_conversation():
 
 if __name__ == "__main__":
     asyncio.run(interactive_conversation())
-

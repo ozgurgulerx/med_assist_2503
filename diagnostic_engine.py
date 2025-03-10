@@ -68,62 +68,61 @@ class DiagnosticEngine:
         each symptom as a dict with onset_date, severity, etc.
         """
         if not symptom:
+            logger.warning("Attempted to add empty symptom")
             return
         
-        symptoms = patient_data.get("symptoms", [])
+        if "symptoms" not in patient_data:
+            logger.info("Initializing symptoms list in patient data")
+            patient_data["symptoms"] = []
+        
+        symptoms = patient_data["symptoms"]
         
         # Convert existing symptom strings into text for matching
         existing_keywords = []
-        for idx, existing_symptom in enumerate(symptoms):
-            # If 'existing_symptom' is a dict in your new structure, adapt accordingly
+        for existing_symptom in symptoms:
             if isinstance(existing_symptom, dict):
                 sname = existing_symptom.get("name", "").lower()
-                existing_keywords.extend(sname.split())
             else:
-                # Legacy fallback: if it's just a string
-                sname = existing_symptom.lower()
-                existing_keywords.extend(sname.split())
+                sname = str(existing_symptom).lower()
+            existing_keywords.extend(sname.split())
         
         new_tokens = symptom.lower().split()
         # Basic overlap check
         has_overlap = any(t for t in new_tokens if t in existing_keywords and len(t) > 3)
         
-        # If it looks like additional detail about an existing symptom, we can
-        # incorporate it. This is a naive approach:
+        # If there's overlap with existing symptoms, update with additional info
         if has_overlap and symptoms:
-            # For brevity, we'll just append text to the first symptom's additional_info
-            # Or combine them. In a real system, you'd do a more refined approach.
-            # Example: pick the first dictionary in 'symptoms' and update it.
-            for sdict in symptoms:
-                if isinstance(sdict, dict):
-                    # Add to additional_info
-                    if "additional_info" not in sdict:
-                        sdict["additional_info"] = {}
-                    detail_key = f"detail_{int(time.time())}"
-                    sdict["additional_info"][detail_key] = symptom
-                    logger.info(f"Updated existing symptom details: {sdict}")
-                    return
+            for idx, existing_symptom in enumerate(symptoms):
+                if isinstance(existing_symptom, dict):
+                    existing_text = existing_symptom["name"].lower()
                 else:
-                    # It's a string, just combine them
-                    combined = f"{sdict} ({symptom})"
-                    # Replace
-                    idx_to_update = symptoms.index(sdict)
-                    symptoms[idx_to_update] = combined
-                    logger.info(f"Combined existing symptom: {combined}")
-                    patient_data["symptoms"] = symptoms
+                    existing_text = str(existing_symptom).lower()
+                
+                if any(token in existing_text for token in new_tokens):
+                    # Convert to dict format if it's a string
+                    if not isinstance(existing_symptom, dict):
+                        symptoms[idx] = {
+                            "name": str(existing_symptom),
+                            "timestamp": current_utc_timestamp(),
+                            "additional_info": symptom
+                        }
+                        logger.info(f"Updated symptom from string to dict: {symptoms[idx]}")
+                    else:
+                        # Append to additional info
+                        if "additional_info" in existing_symptom:
+                            existing_symptom["additional_info"] += f"; {symptom}"
+                        else:
+                            existing_symptom["additional_info"] = symptom
+                        logger.info(f"Updated existing symptom with additional info: {existing_symptom}")
                     return
         
-        # Otherwise, treat it as a new symptom
-        # In your new structure, you might want to store it as a dict
-        new_symptom_entry = {
+        # If no overlap or empty symptoms list, add as new symptom
+        new_symptom = {
             "name": symptom,
-            "onset_date": "",
-            "severity": "",
-            "additional_info": {}
+            "timestamp": current_utc_timestamp()
         }
-        symptoms.append(new_symptom_entry)
-        patient_data["symptoms"] = symptoms
-        logger.info(f"Added new symptom: {new_symptom_entry}")
+        symptoms.append(new_symptom)
+        logger.info(f"Added new symptom: {new_symptom}")
     
     def get_symptoms_text(self, patient_data: Dict[str, Any]) -> str:
         """
@@ -132,20 +131,29 @@ class DiagnosticEngine:
         """
         symptoms = patient_data.get("symptoms", [])
         if not symptoms:
+            logger.info("No symptoms found in patient data")
             return "unknown symptoms"
         
         # For each dict-based symptom, we show the 'name'
         symptom_names = []
         for s in symptoms:
             if isinstance(s, dict):
-                symptom_names.append(s.get("name", ""))
+                symptom_name = s.get("name", "")
+                if symptom_name:
+                    symptom_names.append(symptom_name)
             else:
                 # fallback if it's just a string
-                symptom_names.append(str(s))
+                symptom_text = str(s)
+                if symptom_text:
+                    symptom_names.append(symptom_text)
         
-        if not any(symptom_names):
+        if not symptom_names:
+            logger.warning("Symptoms list exists but no valid symptom names found")
             return "unknown symptoms"
-        return ", ".join(symptom_names)
+        
+        result = ", ".join(symptom_names)
+        logger.info(f"Formatted symptoms text: '{result}'")
+        return result
     
     async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
@@ -201,9 +209,17 @@ Respond with a JSON object:
         Update the patient_data's diagnosis confidence based on current symptoms
         and how many follow-up questions were asked/answered.
         """
+        # Ensure diagnosis structure exists
+        if "diagnosis" not in patient_data:
+            logger.info("Initializing diagnosis structure in patient_data")
+            patient_data["diagnosis"] = {"confidence": 0.0, "name": None}
+        
         symptoms_str = self.get_symptoms_text(patient_data)
+        logger.info(f"Symptoms text for confidence calculation: '{symptoms_str}'")
+        
         if not symptoms_str or symptoms_str == "unknown symptoms":
             # No real symptoms => confidence = 0
+            logger.warning("No valid symptoms found for diagnosis confidence calculation")
             patient_data["diagnosis"]["confidence"] = 0.0
             patient_data["confidence_reasoning"] = "No valid symptoms"
             return
@@ -217,11 +233,12 @@ Respond with a JSON object:
             scount = len(patient_data["symptoms"])
             baseline_conf = min(0.1 * scount, 0.4)
             patient_data["diagnosis"]["confidence"] = baseline_conf
-            patient_data["confidence_reasoning"] = "Initial baseline confidence"
-            logger.info(f"Baseline confidence set to {baseline_conf:.2f}")
+            patient_data["confidence_reasoning"] = f"Initial baseline confidence based on {scount} symptoms"
+            logger.info(f"Baseline confidence set to {baseline_conf:.2f} based on {scount} symptoms")
             return
         
         # Otherwise, call the LLM to compute confidence
+        logger.info(f"Calculating diagnosis confidence using LLM for symptoms: '{symptoms_str}'")
         conf_data = await self.calculate_diagnosis_confidence(symptoms_str)
         confidence = conf_data.get("confidence", 0.0)
         reasoning = conf_data.get("reasoning", "")
@@ -235,12 +252,11 @@ Respond with a JSON object:
         """
         Generate a follow-up question about the user's symptoms.
         The question is appended to asked_questions in 'patient_data'.
+        Uses the full model to generate high-value questions that maximize diagnostic value.
         """
         symptoms_str = self.get_symptoms_text(patient_data)
         
         # Create a simple textual representation of asked questions
-        # (In your code, each 'asked_question' is a dict, but for LLM prompt building
-        # we can just join them as text if we want.)
         asked_list = patient_data.get("asked_questions", [])
         asked_str = ", ".join(q["question"] for q in asked_list if isinstance(q, dict))
         
@@ -249,13 +265,18 @@ Respond with a JSON object:
         question_text = "Can you tell me more about your symptoms?"
         if self.llm_handler.is_available():
             try:
-                prompt = f"""I'm a medical assistant collecting more details.
-Current symptoms: {symptoms_str}
-Already asked: {asked_str}
+                prompt = f"""You are a medical professional gathering information about a patient's symptoms.
+Current reported symptoms: {symptoms_str}
+Previously asked questions: {asked_str}
 
-Suggest one relevant follow-up question to clarify the patient's condition."""
+Generate ONE specific follow-up question that would provide the highest diagnostic value. Consider:
+1. The specific nature and characteristics of the reported symptoms
+2. Key differentiating factors that would help narrow down potential diagnoses
+3. Important clinical indicators that haven't been asked about yet
+
+Format: Return ONLY the question, without any prefixes or additional text."""
                 
-                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
                 possible_question = response_data.get("text", "").strip()
                 if possible_question:
                     question_text = possible_question
@@ -359,4 +380,3 @@ Suggest general care or mitigations, emphasizing this is not a substitute for pr
                 logger.error(f"Error generating mitigations: {e}")
         
         return ("Here's a general suggestion: get rest, stay hydrated, track any changes in symptoms, and follow up with a healthcare provider if needed.")
-

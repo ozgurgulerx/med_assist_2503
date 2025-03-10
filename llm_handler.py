@@ -95,7 +95,7 @@ class LLMHandler:
             prompt: The input text.
             use_full_model: Whether to use the full model instead of mini.
             use_verifier_model: Whether to use the verifier model (highest quality).
-            temperature: Generation temperature.
+            temperature: Generation temperature (only supported by gpt-4o model).
 
         Returns:
             A dictionary containing response text, model, and endpoint details.
@@ -119,7 +119,14 @@ class LLMHandler:
 
         try:
             logger.info(f"LLM prompt using '{service_id}' service: {prompt[:100]}...")
-            self.execution_settings.temperature = temperature
+
+            # Only set temperature for gpt-4o (mini) model
+            if service_id == "mini":
+                self.execution_settings.temperature = temperature
+            else:
+                # Remove temperature for other models that don't support it
+                if hasattr(self.execution_settings, "temperature"):
+                    delattr(self.execution_settings, "temperature")
 
             # Create a temporary chat history
             chat_history = ChatHistory()
