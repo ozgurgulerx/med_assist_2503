@@ -25,11 +25,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class DialogueStateTracker:
-    """Tracks the state of the dialogue to provide context for intent classification"""
+    """Tracks the state of the dialogue to provide context for intent classification."""
     
     def __init__(self):
-        """Initialize the dialogue state tracker"""
+        """Initialize the dialogue state tracker."""
         # Track conversation state for each user
         self.user_states = {}
         
@@ -47,36 +48,36 @@ class DialogueStateTracker:
         ]
     
     def get_state(self, user_id: str) -> str:
-        """Get the current dialogue state for a user"""
+        """Get the current dialogue state for a user."""
         return self.user_states.get(user_id, "greeting")
     
     def update_state(self, user_id: str, state: str) -> None:
-        """Update the dialogue state for a user"""
+        """Update the dialogue state for a user."""
         if state in self.states:
             self.user_states[user_id] = state
     
     def set_expected_response(self, user_id: str, expected_type: str) -> None:
         """
-        Set the type of response expected from the user
+        Set the type of response expected from the user.
         
         Args:
-            user_id: The user's identifier
-            expected_type: Type of expected response (e.g., "yes_no", "symptom_details")
+            user_id: The user's identifier.
+            expected_type: Type of expected response (e.g., "yes_no", "symptom_details").
         """
         self.expected_responses[user_id] = expected_type
     
     def get_expected_response(self, user_id: str) -> Optional[str]:
-        """Get the type of response expected from the user"""
+        """Get the type of response expected from the user."""
         return self.expected_responses.get(user_id)
     
     async def analyze_assistant_message(self, user_id: str, message: str, llm_service) -> None:
         """
-        Update dialogue state based on assistant's message using LLM analysis
+        Update dialogue state based on assistant's message using LLM analysis.
         
         Args:
-            user_id: The user's identifier
-            message: The assistant's message
-            llm_service: LLM service for analysis
+            user_id: The user's identifier.
+            message: The assistant's message.
+            llm_service: LLM service for analysis.
         """
         if not llm_service:
             # Default to collecting symptoms if no LLM available
@@ -152,15 +153,15 @@ Respond with a JSON object:
 
 
 class MedicalIntentClassifier:
-    """Pure LLM-based intent classification system with no hardcoded patterns"""
+    """Pure LLM-based intent classification system with no hardcoded patterns, using updated intent classes."""
     
     def __init__(self, chat_service: AzureChatCompletion = None, kernel: Kernel = None):
         """
-        Initialize the intent classifier
+        Initialize the intent classifier.
         
         Args:
-            chat_service: Azure Chat Completion service for LLM-based classification (optional)
-            kernel: Semantic Kernel instance for plugin access (optional)
+            chat_service: Azure Chat Completion service for LLM-based classification (optional).
+            kernel: Semantic Kernel instance for plugin access (optional).
         """
         # Load environment variables
         load_dotenv()
@@ -194,15 +195,18 @@ class MedicalIntentClassifier:
             self.chat_service = chat_service
             self.is_dedicated_service = False
         
-        # Define intent options
+        # Define updated intent options (no spaces/special chars):
         self.intent_options = [
-            "greet",
-            "inform_symptoms",
-            "ask_medical_info",
-            "confirm",
-            "deny",
-            "goodbye",
-            "out_of_scope"
+            "greeting",
+            "symptomReporting",
+            "symptomClarification",
+            "medicalInquiry",
+            "checkDiagnosis",
+            "personalInfo",
+            "smallTalk",
+            "outOfScope",
+            "urgentEmergency",
+            "endConversation"
         ]
         
         # Initialize dialogue state tracker
@@ -221,12 +225,12 @@ class MedicalIntentClassifier:
     
     def add_to_conversation_history(self, user_id: str, message: str, role: str = "user") -> None:
         """
-        Add a message to the conversation history for a user
+        Add a message to the conversation history for a user.
         
         Args:
-            user_id: The user's identifier
-            message: The message text
-            role: The role of the message sender ("user" or "assistant")
+            user_id: The user's identifier.
+            message: The message text.
+            role: The role of the message sender ("user" or "assistant").
         """
         if user_id not in self.conversation_histories:
             self.conversation_histories[user_id] = []
@@ -253,14 +257,14 @@ class MedicalIntentClassifier:
     
     def get_formatted_history(self, user_id: str, max_turns: int = 3) -> str:
         """
-        Get formatted conversation history for a user
+        Get formatted conversation history for a user.
         
         Args:
-            user_id: The user's identifier
-            max_turns: Maximum number of conversation turns to include
+            user_id: The user's identifier.
+            max_turns: Maximum number of conversation turns to include.
             
         Returns:
-            Formatted conversation history
+            Formatted conversation history.
         """
         if user_id not in self.conversation_histories or not self.conversation_histories[user_id]:
             return "No previous conversation"
@@ -277,20 +281,20 @@ class MedicalIntentClassifier:
         return formatted_history.strip()
     
     def get_previous_question(self, user_id: str) -> str:
-        """Get the most recent question from the assistant"""
+        """Get the most recent question from the assistant."""
         return self.previous_questions.get(user_id, "")
     
     async def analyze_implied_symptoms(self, utterance: str, dialogue_state: str, previous_question: str) -> Optional[float]:
         """
-        Analyze if a message contains implied symptoms based on dialogue context
+        Analyze if a message contains implied symptoms based on dialogue context.
         
         Args:
-            utterance: The user's message
-            dialogue_state: Current dialogue state
-            previous_question: Previous question from the assistant
+            utterance: The user's message.
+            dialogue_state: Current dialogue state.
+            previous_question: Previous question from the assistant.
             
         Returns:
-            Confidence score for implied symptom detection
+            Confidence score for implied symptom detection.
         """
         if not self.chat_service:
             return None
@@ -359,14 +363,14 @@ Respond with a JSON object:
     
     async def classify_with_dialogue_context(self, utterance: str, user_id: str) -> Optional[Dict[str, float]]:
         """
-        Classify intent with full dialogue context awareness
+        Classify intent with full dialogue context awareness.
         
         Args:
-            utterance: The user's message
-            user_id: The user's identifier
+            utterance: The user's message.
+            user_id: The user's identifier.
             
         Returns:
-            Dictionary of intent names and confidence scores
+            Dictionary of intent names and confidence scores.
         """
         if not self.chat_service:
             return None
@@ -377,7 +381,7 @@ Respond with a JSON object:
         conversation_history = self.get_formatted_history(user_id)
         previous_question = self.get_previous_question(user_id)
         
-        # Create a contextual prompt
+        # Create a contextual prompt with updated categories
         prompt = f"""You are a medical assistant analyzing patient intent with full dialogue context.
 
 CONVERSATION HISTORY:
@@ -392,13 +396,16 @@ CURRENT USER MESSAGE: "{utterance}"
 
 Given this full context, classify the user's intent into one of these categories:
 
-- greet: Initial greeting or introduction
-- inform_symptoms: ANY statement describing health concerns, symptoms, physical or mental health issues - including indirect or implicit references
-- ask_medical_info: Questions about health topics or medical information
-- confirm: Affirmative responses (yes, that's right, etc.)
-- deny: Negative responses (no, that's not right, etc.)
-- goodbye: Closing the conversation
-- out_of_scope: Unrelated to medical discussion
+- greeting
+- symptomReporting
+- symptomClarification
+- medicalInquiry
+- checkDiagnosis
+- personalInfo
+- smallTalk
+- outOfScope
+- urgentEmergency
+- endConversation
 
 Respond with a JSON object:
 {{
@@ -465,30 +472,34 @@ Respond with a JSON object:
     
     async def classify_with_medical_knowledge(self, utterance: str) -> Optional[Dict[str, float]]:
         """
-        Classify intent with focus on medical terminology and health expressions
+        Classify intent with focus on medical terminology and health expressions.
         
         Args:
-            utterance: The user's message
+            utterance: The user's message.
             
         Returns:
-            Dictionary of intent names and confidence scores
+            Dictionary of intent names and confidence scores.
         """
         if not self.chat_service:
             return None
         
+        # Updated categories
         prompt = f"""As a medical professional, analyze this patient message to determine its intent:
 
 Patient message: "{utterance}"
 
 Classify this message into one of these intent categories:
 
-- greet: Initial greeting or introduction
-- inform_symptoms: ANY statement describing health experiences, sensations, concerns, or medical conditions
-- ask_medical_info: Questions about health topics or medical information
-- confirm: Affirmative responses (yes, that's right, etc.)
-- deny: Negative responses (no, that's not right, etc.)
-- goodbye: Closing the conversation
-- out_of_scope: Unrelated to medical discussion
+- greeting
+- symptomReporting
+- symptomClarification
+- medicalInquiry
+- checkDiagnosis
+- personalInfo
+- smallTalk
+- outOfScope
+- urgentEmergency
+- endConversation
 
 Respond with a JSON object:
 {{
@@ -556,24 +567,25 @@ Respond with a JSON object:
     async def generate_llm_fallback(self, utterance: str, user_id: str) -> Dict[str, float]:
         """
         Generate a fallback intent classification using LLM with minimal context
-        when other methods fail
+        when other methods fail.
         
         Args:
-            utterance: The user's message
-            user_id: The user's identifier
+            utterance: The user's message.
+            user_id: The user's identifier.
             
         Returns:
-            Dictionary of intent scores based on LLM fallback
+            Dictionary of intent scores based on LLM fallback.
         """
         if not self.chat_service:
             # Last resort emergency fallback
             scores = {intent: 0.1 for intent in self.intent_options}
-            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection in medical context
+            scores["symptomReporting"] = 0.6  # Slight bias toward symptom detection in medical context
             return scores
             
         # Get minimal dialogue context
         dialogue_state = self.dialogue_tracker.get_state(user_id)
-            
+        
+        # Updated categories
         prompt = f"""You're a medical assistant analyzing a single user message.
 
 User message: "{utterance}"
@@ -581,7 +593,16 @@ Current dialogue state: {dialogue_state}
 
 Classify which intent is most likely:
 
-greet | inform_symptoms | ask_medical_info | confirm | deny | goodbye | out_of_scope
+- greeting
+- symptomReporting
+- symptomClarification
+- medicalInquiry
+- checkDiagnosis
+- personalInfo
+- smallTalk
+- outOfScope
+- urgentEmergency
+- endConversation
 
 This is for a medical assistant, so be aware that many messages will contain health information.
 Respond with a JSON object:
@@ -627,28 +648,28 @@ Respond with a JSON object:
             # If we reached here, something went wrong with parsing
             # Emergency fallback
             scores = {intent: 0.1 for intent in self.intent_options}
-            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection
+            scores["symptomReporting"] = 0.6
             return scores
             
         except Exception as e:
             logger.error(f"Error in LLM fallback: {str(e)}")
             # Emergency fallback
             scores = {intent: 0.1 for intent in self.intent_options}
-            scores["inform_symptoms"] = 0.6  # Bias toward symptom detection
+            scores["symptomReporting"] = 0.6
             return scores
     
     async def weighted_ensemble_classification(self, methods_results: List[Tuple[str, Dict[str, float]]], 
                                               utterance: str, user_id: str) -> Dict[str, float]:
         """
-        Combine results from multiple classification methods using a dynamic weighted ensemble
+        Combine results from multiple classification methods using a dynamic weighted ensemble.
         
         Args:
-            methods_results: List of (method_name, result) tuples from different methods
-            utterance: The user's message
-            user_id: The user's identifier
+            methods_results: List of (method_name, result) tuples from different methods.
+            utterance: The user's message.
+            user_id: The user's identifier.
             
         Returns:
-            Combined intent scores
+            Combined intent scores.
         """
         # Initialize combined scores
         combined_scores = {intent: 0.0 for intent in self.intent_options}
@@ -665,7 +686,7 @@ Respond with a JSON object:
                 "implied_symptoms": 0.2
             }
         elif dialogue_state in ["greeting", "closing"]:
-            # For simple interactions, all methods are roughly equal
+            # For simpler states, methods are roughly equal
             weights = {
                 "dialogue_context": 0.4,
                 "medical_knowledge": 0.3,
@@ -687,30 +708,31 @@ Respond with a JSON object:
             if result and method_name in weights:
                 method_weight = weights[method_name]
                 
-                # Special handling for implied symptoms analysis
                 if method_name == "implied_symptoms":
-                    # This is just a confidence score for "inform_symptoms"
+                    # This is just a confidence measure for "symptomReporting"
                     confidence = result
                     if confidence > 0.5:
-                        combined_scores["inform_symptoms"] += confidence * method_weight
+                        combined_scores["symptomReporting"] += confidence * method_weight
                         total_weight += method_weight
                 else:
-                    # Regular classification result
+                    # Normal classification result
                     for intent, score in result.items():
                         combined_scores[intent] += score * method_weight
                     
                     total_weight += method_weight
         
-        # If no methods returned results, return the LLM fallback
+        # If no methods returned results, revert to fallback
         if total_weight < 0.1:
             logger.warning("No classification methods succeeded, using LLM fallback")
             return await self.generate_llm_fallback(utterance, user_id)
         
         # Normalize scores based on applied weight
         for intent in combined_scores:
-            combined_scores[intent] = combined_scores[intent] / total_weight if total_weight > 0 else 0.1
+            combined_scores[intent] = (
+                combined_scores[intent] / total_weight if total_weight > 0 else 0.1
+            )
         
-        # Get the top intent and score
+        # Get the top intent for logging
         top_intent = max(combined_scores.items(), key=lambda x: x[1])[0]
         top_score = combined_scores[top_intent]
         
@@ -719,17 +741,17 @@ Respond with a JSON object:
     
     async def classify_intent(self, utterance: str, user_id: str = "default_user") -> Dict[str, float]:
         """
-        Advanced intent classification using multiple methods and dialogue context
+        Advanced intent classification using multiple methods and dialogue context, with updated classes.
         
         Args:
-            utterance: The user's message
-            user_id: The user's identifier
+            utterance: The user's message.
+            user_id: The user's identifier.
             
         Returns:
-            Dictionary of intent names and confidence scores
+            Dictionary of intent names and confidence scores.
         """
         if not utterance.strip():
-            return {"out_of_scope": 1.0}
+            return {"outOfScope": 1.0}
         
         # Add this message to conversation history
         self.add_to_conversation_history(user_id, utterance, "user")
@@ -738,7 +760,7 @@ Respond with a JSON object:
         dialogue_state = self.dialogue_tracker.get_state(user_id)
         previous_question = self.get_previous_question(user_id)
         
-        # Check cache first for very frequent identical messages
+        # Check cache first for repeated identical messages
         cache_key = f"{user_id}:{utterance}:{dialogue_state}"
         if cache_key in self.classification_cache:
             logger.info(f"Using cached classification result for: {utterance}")
@@ -755,7 +777,6 @@ Respond with a JSON object:
         
         # Process results, filtering out exceptions
         valid_results = []
-        
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Classification method error: {str(result)}")
@@ -780,3 +801,4 @@ Respond with a JSON object:
         self.classification_cache[cache_key] = fallback_result
         
         return fallback_result
+

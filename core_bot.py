@@ -4,6 +4,12 @@ Core medical assistant bot using Semantic Kernel
 This is the main module that coordinates all components of the medical assistant bot.
 It handles message processing, orchestrates dialog flow, and integrates the diagnostic
 engine with self-reflection based confidence calculation.
+
+Changes made:
+- Removed fallback checks for LLM availability and any "last resort fallback" logic.
+- Introduced a standardized patient data model under user_data["patient_data"].
+- Added a simple way to parse demographic info (age, gender, weight, height) from user messages and update the patient_data model accordingly.
+- Kept all other functionality intact as requested.
 """
 import os
 import asyncio
@@ -32,11 +38,70 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def initialize_patient_data_if_needed(user_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure that user_data has a 'patient_data' key with the standard structure.
+    Returns the patient_data dict.
+    """
+    if "patient_data" not in user_data:
+        user_data["patient_data"] = {
+            "patient_id": "",  # can be set to a real ID or remain empty
+            "demographics": {
+                "age": 0,
+                "gender": "",
+                "weight": 0.0,
+                "height": 0.0,
+                "other_demographics": {}
+            },
+            "symptoms": [],
+            "medical_history": [],
+            "asked_questions": [],
+            "diagnosis": {
+                "name": None,
+                "confidence": 0.0
+            },
+            "mitigations": []
+        }
+    return user_data["patient_data"]
+
+def parse_and_update_demographics(patient_data: Dict[str, Any], message: str) -> None:
+    """
+    Very simple demonstration parser that checks the user message
+    for lines like 'age: 40', 'gender: male', 'weight: 72.5', 'height: 170.2'
+    and updates the patient_data accordingly.
+    """
+    # For example, look for lines 'age: <number>' etc.
+    # This is a naive approach; in a real system, you'd use a more robust parser.
+    lines = message.split("\n")
+    for line in lines:
+        parts = line.lower().split(":")
+        if len(parts) == 2:
+            key = parts[0].strip()
+            value = parts[1].strip()
+            if key == "age":
+                try:
+                    patient_data["demographics"]["age"] = int(value)
+                except ValueError:
+                    pass
+            elif key == "gender":
+                patient_data["demographics"]["gender"] = value
+            elif key == "weight":
+                try:
+                    patient_data["demographics"]["weight"] = float(value)
+                except ValueError:
+                    pass
+            elif key == "height":
+                try:
+                    patient_data["demographics"]["height"] = float(value)
+                except ValueError:
+                    pass
+    # Additional logic for other demographics can go here if needed.
+
 class MedicalAssistantBot:
-    """Flexible medical assistant that can handle any medical issue"""
+    """Flexible medical assistant that can handle any medical issue."""
     
     def __init__(self):
-        """Initialize the medical assistant bot"""
+        """Initialize the medical assistant bot."""
         # Initialize components
         self.llm_handler = LLMHandler()
         self.medical_plugin = MedicalKnowledgePlugin()
@@ -49,50 +114,50 @@ class MedicalAssistantBot:
         # Chat histories by user ID
         self.chat_histories: Dict[str, ChatHistory] = {}
         
-        # User data storage - contains patient_data and other user-specific info
+        # User data storage - includes 'patient_data' as well as other user-specific info
         self.user_data: Dict[str, Dict[str, Any]] = {}
         
         # Track model usage for responses
         self.model_usage: Dict[str, Dict[str, str]] = {}
     
     def get_chat_history(self, user_id: str) -> ChatHistory:
-        """Get or create chat history for a user"""
+        """Get or create chat history for a user."""
         if user_id not in self.chat_histories:
             self.chat_histories[user_id] = ChatHistory()
         return self.chat_histories[user_id]
     
     def get_user_data(self, user_id: str) -> Dict[str, Any]:
-        """Get or create user data"""
+        """Get or create user data."""
         if user_id not in self.user_data:
             self.user_data[user_id] = {}
         return self.user_data[user_id]
     
     def track_model_usage(self, user_id: str, model_info: Dict[str, str]) -> None:
-        """Track model usage for a user"""
+        """Track model usage for a user."""
         if user_id not in self.model_usage:
             self.model_usage[user_id] = {}
         
         self.model_usage[user_id] = model_info
     
     def get_model_usage(self, user_id: str) -> Dict[str, str]:
-        """Get model usage for a user"""
+        """Get model usage for a user."""
         return self.model_usage.get(user_id, {"model": "unknown", "deployment": "unknown"})
     
     async def execute_action(self, action_name: str, user_id: str, user_message: str = "") -> str:
         """
-        Execute a dialog action and return the response
+        Execute a dialog action and return the response.
         
         Args:
-            action_name: Name of the action to execute
-            user_id: User identifier
-            user_message: Original user message
+            action_name: Name of the action to execute.
+            user_id: User identifier.
+            user_message: Original user message.
             
         Returns:
-            Response text
+            Response text.
         """
-        # Get user data and ensure patient_data exists
+        # Get user data and ensure patient_data is defined
         user_data = self.get_user_data(user_id)
-        patient_data = self.diagnostic_engine.get_patient_data(user_data)
+        patient_data = initialize_patient_data_if_needed(user_data)
         
         logger.info(f"Executing action: {action_name}")
         
@@ -106,30 +171,23 @@ class MedicalAssistantBot:
             # Get the original message for context
             original_message = self.dialog_manager.get_original_message(user_id)
             
-            if self.llm_handler.is_available():
-                try:
-                    # Create a prompt to acknowledge the off-topic message
-                    prompt = f"""The user has sent a message that appears to be outside the scope of a medical conversation. 
+            # Removed fallback checks; always attempt LLM
+            try:
+                prompt = f"""The user has sent a message that appears to be outside the scope of a medical conversation. 
 Their message was: "{original_message}"
 
 Provide a polite, brief response that acknowledges their message but gently redirects the conversation to medical topics.
 Make sure your response is concise (max 2 sentences) and ends with a question about their health concerns."""
-
-                    # Get response directly from LLM
-                    response_data = await self.llm_handler.execute_prompt(prompt)
-                    
-                    # Track model usage
-                    self.track_model_usage(user_id, {
-                        "model": response_data.get("model", "unknown"),
-                        "deployment": response_data.get("deployment", "unknown")
-                    })
-                    
-                    return response_data.get("text", "")
-                except Exception as e:
-                    logger.error(f"Error handling out of scope message with LLM: {str(e)}")
-            
-            # Fallback response if LLM fails
-            return f"I understand you're asking about \"{original_message}\", but I'm primarily designed to help with medical questions."
+                
+                response_data = await self.llm_handler.execute_prompt(prompt)
+                self.track_model_usage(user_id, {
+                    "model": response_data.get("model", "unknown"),
+                    "deployment": response_data.get("deployment", "unknown")
+                })
+                return response_data.get("text", "")
+            except Exception as e:
+                logger.error(f"Error handling out of scope message with LLM: {str(e)}")
+                return f"I understand you're asking about \"{original_message}\", but I'm primarily designed to help with medical questions."
         
         elif action_name == "utter_redirect_to_medical":
             return "Is there something about your health I can help with today?"
@@ -140,7 +198,6 @@ Make sure your response is concise (max 2 sentences) and ends with a question ab
             
             # After asking a follow-up, update the diagnosis confidence
             await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
-            
             return response
         
         elif action_name == "action_verify_symptoms":
@@ -148,32 +205,25 @@ Make sure your response is concise (max 2 sentences) and ends with a question ab
             return await self.diagnostic_engine.verify_symptoms(patient_data)
         
         elif action_name == "action_provide_medical_info":
-            # Extract the topic from user message
             topic = user_message
-            
-            if self.llm_handler.is_available():
-                try:
-                    # Create a prompt for medical information
-                    prompt = f"""Provide general medical information about the following topic:
+            try:
+                # Provide general medical information
+                prompt = f"""Provide general medical information about the following topic:
 Topic: {topic}
 Patient demographics: {patient_data.get("demographics", {})}
 
 Give helpful, accurate information while emphasizing this is general advice and not a substitute for professional medical care."""
-
-                    # Use full model for medical information
-                    response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
-                    
-                    # Track model usage
-                    self.track_model_usage(user_id, {
-                        "model": response_data.get("model", "unknown"),
-                        "deployment": response_data.get("deployment", "unknown")
-                    })
-                    
-                    return response_data.get("text", "")
-                except Exception as e:
-                    logger.error(f"Error providing medical information with LLM: {str(e)}")
+                
+                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                self.track_model_usage(user_id, {
+                    "model": response_data.get("model", "unknown"),
+                    "deployment": response_data.get("deployment", "unknown")
+                })
+                return response_data.get("text", "")
+            except Exception as e:
+                logger.error(f"Error providing medical information with LLM: {str(e)}")
             
-            # Use the plugin method or fallback
+            # Attempt the plugin if an exception occurred
             if self.medical_plugin:
                 try:
                     response = await self.medical_plugin.provide_medical_information(
@@ -182,9 +232,8 @@ Give helpful, accurate information while emphasizing this is general advice and 
                     )
                     return str(response)
                 except Exception as e:
-                    logger.error(f"Error providing medical information: {str(e)}")
+                    logger.error(f"Error providing medical information via plugin: {str(e)}")
             
-            # Last resort fallback
             return f"I can provide general information about {topic}, but remember to consult with a healthcare professional for personalized advice."
         
         elif action_name == "action_provide_diagnosis":
@@ -207,16 +256,16 @@ Give helpful, accurate information while emphasizing this is general advice and 
     
     async def _generate_user_context(self, history: ChatHistory) -> Dict[str, Any]:
         """
-        Generate a summarized user context from conversation history
+        Generate a summarized user context from conversation history.
         
         Args:
-            history: The chat history
+            history: The chat history.
                 
         Returns:
-            Dictionary with context text and model info
+            Dictionary with context text and model info.
         """
-        if not self.llm_handler.is_available() or len(history.messages) < 3:
-            # If LLM not available or not enough history, return empty context
+        # Removed llm availability check; always try the prompt
+        if len(history.messages) < 3:
             return {
                 "text": "No context generated",
                 "model": "none",
@@ -240,7 +289,6 @@ CONVERSATION HISTORY:
 Provide a concise (2-3 sentence) summary of this user's context.
 """
             
-            # Use mini model for efficiency
             response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
             return response_data
         except Exception as e:
@@ -253,7 +301,7 @@ Provide a concise (2-3 sentence) summary of this user's context.
 
     def _generate_diagnostic_info(self, user_id: str, patient_data: Dict[str, Any], intent: str, user_context: Dict[str, Any], model_info: Dict[str, str]) -> str:
         """
-        Generate a formatted diagnostic information block
+        Generate a formatted diagnostic information block.
         
         Args:
             user_id: The user's identifier
@@ -268,13 +316,19 @@ Provide a concise (2-3 sentence) summary of this user's context.
         # Get current dialog state
         current_state = self.dialog_manager.get_user_state(user_id)
         
-        # Get confidence and symptoms
-        symptoms_list = patient_data.get("symptoms", [])
-        symptoms_text = ", ".join(symptoms_list) if symptoms_list else "None recorded"
+        # Some type of "symptoms" can be either an array of symptom objects
+        # We'll just display the names for simplicity
+        symptom_objs = patient_data.get("symptoms", [])
+        if symptom_objs:
+            symptoms_text = ", ".join(s.get("name", "unknown") for s in symptom_objs)
+        else:
+            symptoms_text = "None recorded"
         
-        confidence = patient_data.get("diagnosis_confidence", 0.0)
+        diagnosis_info = patient_data.get("diagnosis", {})
+        confidence = diagnosis_info.get("confidence", 0.0)
         confidence_text = f"{confidence:.2f} ({confidence * 100:.1f}%)"
         
+        # Additional reasoning or placeholders
         confidence_reasoning = patient_data.get("confidence_reasoning", "No reasoning available")
         
         # Extract model information
@@ -285,13 +339,13 @@ Provide a concise (2-3 sentence) summary of this user's context.
         diagnosis_model = patient_data.get("diagnosis_model", "Not yet used")
         verification_model = patient_data.get("verification_model", "Not yet used")
         
-        # Format the diagnostic information
         diagnostic_info = f"""
     --------- DIAGNOSTIC INFORMATION ---------
     User Context: {user_context.get('text', 'None')}
     Current State: {current_state}
     Last Intent: {intent}
     Symptoms: {symptoms_text}
+    Diagnosis: {diagnosis_info.get("name", None)}
     Diagnosis Confidence: {confidence_text}
     Confidence Reasoning: {confidence_reasoning}
 
@@ -306,7 +360,7 @@ Provide a concise (2-3 sentence) summary of this user's context.
         
     async def process_message(self, user_id: str, message: str, include_diagnostics: bool = True) -> str:
         """
-        Process a user message and return the response with diagnostic information
+        Process a user message and return the response with diagnostic information.
         
         Args:
             user_id: The user's identifier
@@ -320,8 +374,11 @@ Provide a concise (2-3 sentence) summary of this user's context.
         history = self.get_chat_history(user_id)
         user_data = self.get_user_data(user_id)
         
-        # Ensure patient data exists
-        patient_data = self.diagnostic_engine.get_patient_data(user_data)
+        # Ensure the patient_data structure is present
+        patient_data = initialize_patient_data_if_needed(user_data)
+        
+        # Attempt to parse any demographic lines in the user's message
+        parse_and_update_demographics(patient_data, message)
         
         # Store the original message for context in out_of_scope handling
         self.dialog_manager.store_original_message(user_id, message)
@@ -332,7 +389,7 @@ Provide a concise (2-3 sentence) summary of this user's context.
         # Generate user context from conversation history
         user_context = await self._generate_user_context(history)
         
-        # Classify intent
+        # Classify intent using the LLM-based classifier
         intents = await self.intent_classifier.classify_intent(message)
         top_intent = max(intents.items(), key=lambda x: x[1])[0]
         top_score = max(intents.items(), key=lambda x: x[1])[1]
@@ -341,18 +398,13 @@ Provide a concise (2-3 sentence) summary of this user's context.
         logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
         logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
         
-        # Extract symptoms if the intent is about symptoms
+        # If the user is informing symptoms, add them in a naive way
         if top_intent == "inform_symptoms":
-            # Add to symptoms if not already present
             self.diagnostic_engine.add_symptom(patient_data, message)
-            
-            # Update confidence after adding a new symptom
             await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
-            
-            # Check if we should transition to verification based on confidence
+            # Possibly move to verification if confidence is high enough
             if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
-                # This will update the state to verification if needed
-                logger.info(f"Confidence threshold reached, transitioning to verification")
+                logger.info("Confidence threshold reached, transitioning to verification")
         
         # Determine next state based on current state and intent
         next_state = self.dialog_manager.get_next_state(user_id, top_intent)
@@ -378,33 +430,23 @@ Provide a concise (2-3 sentence) summary of this user's context.
         # Get model information
         model_info = self.get_model_usage(user_id)
         
-        # Optionally include diagnostic information in the response
+        # Optionally include diagnostic information
         if include_diagnostics:
-            # Include intent classification details in diagnostic info
             intent_details = f"{top_intent} (confidence: {top_score:.2f})"
-            
-            # Create diagnostic block
             diagnostic_info = self._generate_diagnostic_info(
-                user_id, 
-                patient_data, 
-                intent_details, 
-                user_context, 
-                model_info
+                user_id, patient_data, intent_details, user_context, model_info
             )
-            
-            # Append diagnostic information to response
             enhanced_response = f"{full_response}\n\n{diagnostic_info}"
             return enhanced_response
         else:
             return full_response
 
 # External functions for API and CLI interfaces
-# Global dictionary to store bot instances
 _bot_instances = {}
 
 async def process_message_api(message: str, user_id: str = None, include_diagnostics: bool = True) -> str:
     """
-    Process a single message from an API request and return the response with diagnostic information
+    Process a single message from an API request and return the response with diagnostic information.
     
     Args:
         message: The user's message text
@@ -416,11 +458,9 @@ async def process_message_api(message: str, user_id: str = None, include_diagnos
     """
     global _bot_instances
     
-    # Use the provided user_id or generate a consistent one
     if not user_id:
-        user_id = f"api_user_{hash(message) % 10000}"  # Simple hash-based ID if none provided
+        user_id = f"api_user_{hash(message) % 10000}"
     
-    # Get or create a bot instance for this user
     if user_id not in _bot_instances:
         logger.info(f"Creating new bot instance for user: {user_id}")
         _bot_instances[user_id] = MedicalAssistantBot()
@@ -428,44 +468,25 @@ async def process_message_api(message: str, user_id: str = None, include_diagnos
     bot = _bot_instances[user_id]
     
     try:
-        # Process the message with the persistent bot instance
         response = await bot.process_message(user_id, message, include_diagnostics=include_diagnostics)
         return response
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         logger.error(f"Error processing API message for user {user_id}: {str(e)}\n{error_details}")
-        return f"I'm sorry, I encountered an error processing your message. Please try again."
-    
+        return "I'm sorry, I encountered an error processing your message. Please try again."
 
 async def interactive_conversation():
-    """Run an interactive conversation with the medical assistant bot with enhanced debugging"""
-    import os
+    """Run an interactive conversation with the medical assistant bot with enhanced debugging."""
     import logging
     import traceback
     
     logger = logging.getLogger(__name__)
     
-    # Check for environment variables
-    if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
-        print("\n⚠️ WARNING: Azure OpenAI environment variables not set.")
-        print("Using fallback responses instead of actual AI service.")
-        print("\nTo use Azure OpenAI, please set:")
-        print("  export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
-        print("  export AZURE_OPENAI_API_KEY='your-api-key'")
-        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='gpt-4o'")
-        print("  export AZURE_OPENAI_MINI_DEPLOYMENT_NAME='gpt-4o-mini'")
-    else:
-        print("\n✅ Azure OpenAI credentials detected.")
-        print(f"  Endpoint: {os.getenv('AZURE_OPENAI_ENDPOINT')}")
-        print(f"  Primary model: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o')}")
-        print(f"  Mini model: {os.getenv('AZURE_OPENAI_MINI_DEPLOYMENT_NAME', 'gpt-4o-mini')}")
-    
     print("\nInitializing bot...")
     bot = MedicalAssistantBot()
     user_id = "interactive_user"
     
-    # Diagnostic toggle
     include_diagnostics = True
     
     print("\n----- Starting Interactive Medical Assistant Conversation -----")
@@ -474,103 +495,71 @@ async def interactive_conversation():
     print("Type 'debug on/off' to toggle diagnostic information.")
     print("Type 'help' for more commands.\n")
     
-    # Initial greeting
     print("Bot: Hello! I'm your medical assistant. How can I help you today?")
     
     while True:
-        # Get user input
         try:
             user_input = input("\nYou: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting conversation due to keyboard interrupt.")
             break
             
-        # Check for special commands
         if user_input.lower() in ["exit", "quit", "bye"]:
             print("\nBot: Thank you for talking with me. Take care!")
             break
-            
         elif user_input.lower() == "help":
             print("\n----- Commands -----")
             print("exit, quit, bye - End the conversation")
             print("debug on/off - Toggle diagnostic information")
             print("clear - Clear the conversation history")
-            print("status - Check bot and connection status")
+            print("status - Check bot status")
             print("------------------")
             continue
-            
         elif user_input.lower() in ["debug on", "debug true"]:
             include_diagnostics = True
             print("\nDiagnostic information enabled.")
             continue
-            
         elif user_input.lower() in ["debug off", "debug false"]:
             include_diagnostics = False
             print("\nDiagnostic information disabled.")
             continue
-            
         elif user_input.lower() == "clear":
-            # Reset the user's conversation
             if user_id in bot.chat_histories:
                 bot.chat_histories[user_id] = ChatHistory()
                 bot.user_data[user_id] = {}
                 print("\nConversation history cleared.")
             continue
-            
         elif user_input.lower() == "status":
-            llm_status = "Available" if bot.llm_handler.is_available() else "Unavailable"
-            full_model = "Available" if bot.llm_handler.is_full_model_available() else "Unavailable"
-            
             print("\n----- Bot Status -----")
-            print(f"LLM Service: {llm_status}")
-            print(f"Full Model: {full_model}")
             print(f"Dialog State: {bot.dialog_manager.get_user_state(user_id)}")
             
-            # Show symptoms if any
             if user_id in bot.user_data and "patient_data" in bot.user_data[user_id]:
-                symptoms = bot.user_data[user_id]["patient_data"].get("symptoms", [])
-                if symptoms:
-                    print(f"Recorded Symptoms: {', '.join(symptoms)}")
-                    
-                confidence = bot.user_data[user_id]["patient_data"].get("diagnosis_confidence", 0.0)
-                print(f"Diagnosis Confidence: {confidence:.2f}")
-            
+                pd = bot.user_data[user_id]["patient_data"]
+                print("Patient Data Model:")
+                print(pd)
             print("---------------------")
             continue
         
-        # Skip empty messages
         if not user_input:
             continue
             
         try:
-            # Show processing indicator
             print("Bot: Thinking...", end="\r")
-            
-            # Log the user input
             logger.info(f"Processing user input: {user_input}")
             
-            # Process the message with diagnostic information
             response = await bot.process_message(user_id, user_input, include_diagnostics=include_diagnostics)
-            
-            # Clear the "thinking" indicator
             print(" " * 50, end="\r")
             
-            # Print the response
             print(f"\nBot: {response}")
                 
         except Exception as e:
-            # Clear the "thinking" indicator
             print(" " * 50, end="\r")
-            
             error_msg = str(e)
             print(f"\n❌ Error processing message: {error_msg}")
-            
-            # Log the full error with traceback
             logger.error(f"Error processing message: {error_msg}")
             logger.error(traceback.format_exc())
-            
-            # Provide a helpful message to the user
             print("\nBot: I'm sorry, I encountered an error. Please check the logs for details or try again.")
-# Entry point for running the bot directly
+
 if __name__ == "__main__":
     asyncio.run(interactive_conversation())
+

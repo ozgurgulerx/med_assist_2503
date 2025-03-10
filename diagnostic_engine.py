@@ -1,13 +1,21 @@
-"""
-Diagnostic engine for medical assistant bot
-"""
 import logging
+import time
+import json
+import re
 from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+def current_utc_timestamp() -> str:
+    """
+    Simple helper to generate a UTC timestamp string, e.g. 2025-03-10T09:00:00Z
+    You can replace with a more robust approach if needed.
+    """
+    import datetime
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
 class DiagnosticEngine:
-    """Handles medical diagnosis and symptom analysis"""
+    """Handles medical diagnosis and symptom analysis."""
     
     def __init__(self, llm_handler, medical_plugin=None):
         """
@@ -22,378 +30,333 @@ class DiagnosticEngine:
     
     def get_patient_data(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Ensure patient data structure is properly initialized
-        
+        Ensure patient data structure is properly initialized.
+
         Args:
             user_data: The user's data dictionary
-            
+
         Returns:
             Patient data dictionary with all required fields
         """
-        # Make sure we have the right structure
         if "patient_data" not in user_data:
             user_data["patient_data"] = {
+                "patient_id": "",
+                "demographics": {
+                    "age": 0,
+                    "gender": "",
+                    "weight": 0.0,
+                    "height": 0.0,
+                    "other_demographics": {}
+                },
                 "symptoms": [],
-                "demographics": {},
+                "medical_history": [],
                 "asked_questions": [],
-                "diagnosis": None,
-                "mitigations": [],
-                "diagnosis_confidence": 0.0
+                "diagnosis": {
+                    "name": None,
+                    "confidence": 0.0
+                },
+                "mitigations": []
             }
         
         return user_data["patient_data"]
     
     def add_symptom(self, patient_data: Dict[str, Any], symptom: str) -> None:
         """
-        Add a symptom to patient data, or update existing symptoms with new details
-        
-        Args:
-            patient_data: The patient data dictionary
-            symptom: The symptom to add
+        Add or refine a symptom in the patient data structure.
+
+        This is a simplistic approach; for a more robust system, you might store
+        each symptom as a dict with onset_date, severity, etc.
         """
         if not symptom:
             return
-            
-        # First check if this is new information to be combined with existing symptoms
+        
         symptoms = patient_data.get("symptoms", [])
         
-        # If we already have symptoms and this adds details, combine them
-        if symptoms and symptom not in symptoms:
-            # Check for key symptom terms to determine if this is additional detail
-            # about an existing symptom or a completely new symptom
-            existing_keywords = []
-            for existing in symptoms:
-                # Extract key terms from existing symptoms
-                words = existing.lower().split()
-                existing_keywords.extend([w for w in words if len(w) > 3])
-            
-            # If the new symptom contains keywords from existing symptoms
-            # treat it as additional details
-            symptom_words = symptom.lower().split()
-            has_overlap = any(word in existing_keywords for word in symptom_words if len(word) > 3)
-            
-            if has_overlap:
-                # This is likely additional detail about the same symptoms
-                # Replace the most relevant symptom with a combined version
-                most_similar = None
-                highest_similarity = 0
-                
-                for i, existing in enumerate(symptoms):
-                    # Simple token overlap similarity
-                    existing_tokens = set(existing.lower().split())
-                    new_tokens = set(symptom.lower().split())
-                    overlap = len(existing_tokens.intersection(new_tokens))
-                    similarity = overlap / len(existing_tokens.union(new_tokens))
-                    
-                    if similarity > highest_similarity:
-                        highest_similarity = similarity
-                        most_similar = i
-                
-                if most_similar is not None and highest_similarity > 0.2:
-                    # Combine the existing symptom with the new details
-                    combined = f"{symptoms[most_similar]} ({symptom})"
-                    symptoms[most_similar] = combined
+        # Convert existing symptom strings into text for matching
+        existing_keywords = []
+        for idx, existing_symptom in enumerate(symptoms):
+            # If 'existing_symptom' is a dict in your new structure, adapt accordingly
+            if isinstance(existing_symptom, dict):
+                sname = existing_symptom.get("name", "").lower()
+                existing_keywords.extend(sname.split())
+            else:
+                # Legacy fallback: if it's just a string
+                sname = existing_symptom.lower()
+                existing_keywords.extend(sname.split())
+        
+        new_tokens = symptom.lower().split()
+        # Basic overlap check
+        has_overlap = any(t for t in new_tokens if t in existing_keywords and len(t) > 3)
+        
+        # If it looks like additional detail about an existing symptom, we can
+        # incorporate it. This is a naive approach:
+        if has_overlap and symptoms:
+            # For brevity, we'll just append text to the first symptom's additional_info
+            # Or combine them. In a real system, you'd do a more refined approach.
+            # Example: pick the first dictionary in 'symptoms' and update it.
+            for sdict in symptoms:
+                if isinstance(sdict, dict):
+                    # Add to additional_info
+                    if "additional_info" not in sdict:
+                        sdict["additional_info"] = {}
+                    detail_key = f"detail_{int(time.time())}"
+                    sdict["additional_info"][detail_key] = symptom
+                    logger.info(f"Updated existing symptom details: {sdict}")
+                    return
+                else:
+                    # It's a string, just combine them
+                    combined = f"{sdict} ({symptom})"
+                    # Replace
+                    idx_to_update = symptoms.index(sdict)
+                    symptoms[idx_to_update] = combined
+                    logger.info(f"Combined existing symptom: {combined}")
                     patient_data["symptoms"] = symptoms
-                    logger.info(f"Updated symptom with details: {combined}")
                     return
         
-        # If it's a new symptom or we don't have any symptoms yet, add it
-        if symptom not in symptoms:
-            symptoms.append(symptom)
-            patient_data["symptoms"] = symptoms
-            logger.info(f"Added new symptom: {symptom}")
+        # Otherwise, treat it as a new symptom
+        # In your new structure, you might want to store it as a dict
+        new_symptom_entry = {
+            "name": symptom,
+            "onset_date": "",
+            "severity": "",
+            "additional_info": {}
+        }
+        symptoms.append(new_symptom_entry)
+        patient_data["symptoms"] = symptoms
+        logger.info(f"Added new symptom: {new_symptom_entry}")
     
     def get_symptoms_text(self, patient_data: Dict[str, Any]) -> str:
         """
-        Get all symptoms as a comma-separated string
-        
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            String of symptoms
+        Create a short textual summary of the user's symptoms
+        by listing each symptom's name. This is used for prompt building.
         """
         symptoms = patient_data.get("symptoms", [])
         if not symptoms:
             return "unknown symptoms"
-        return ", ".join(symptoms)
-    
-    def get_asked_questions_text(self, patient_data: Dict[str, Any]) -> str:
-        """
-        Get all asked questions as a comma-separated string
         
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            String of asked questions
-        """
-        questions = patient_data.get("asked_questions", [])
-        if not questions:
-            return ""
-        return ", ".join(questions)
-
+        # For each dict-based symptom, we show the 'name'
+        symptom_names = []
+        for s in symptoms:
+            if isinstance(s, dict):
+                symptom_names.append(s.get("name", ""))
+            else:
+                # fallback if it's just a string
+                symptom_names.append(str(s))
+        
+        if not any(symptom_names):
+            return "unknown symptoms"
+        return ", ".join(symptom_names)
+    
     async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
-        Calculate confidence in diagnosis based on provided symptoms using LLM.
-        
-        Args:
-            symptoms: The symptoms text to analyze
-            
-        Returns:
-            Dictionary with confidence score and reasoning
+        Use the LLM to compute a confidence measure (0.0 to 1.0).
+        If LLM not available, return a default low confidence.
         """
-        if not self.llm_handler.is_available():  # Check the LLM handler, not self
+        if not self.llm_handler.is_available():
             return {
                 "confidence": 0.3,
-                "reasoning": "Limited confidence due to unavailable LLM service"
+                "reasoning": "Limited confidence - LLM unavailable"
             }
         
+        prompt = f"""Analyze these symptoms to assess how confident a medical professional would be in providing a diagnosis:
+
+Symptoms: {symptoms}
+
+Consider:
+- Specificity of symptoms
+- Duration, severity
+- Whether they match multiple conditions or a singular pattern
+
+Respond with a JSON object:
+{{
+"confidence": 0.7,
+"reasoning": "why"
+}}
+"""
         try:
-            prompt = f"""Analyze these symptoms to assess how confident a medical professional would be in providing a diagnosis:
-
-    Symptoms: {symptoms}
-
-    Consider factors like:
-    - Specificity of symptoms described
-    - Whether duration and severity are mentioned
-    - Presence of characteristic patterns
-    - Whether symptoms could match multiple conditions
-
-    Respond with a confidence score between 0.0 and 1.0 where:
-    - 0.1-0.3: Very low confidence (vague symptoms, minimal details)
-    - 0.3-0.5: Low confidence (some details but ambiguous presentation)
-    - 0.5-0.7: Moderate confidence (specific symptoms with some context)
-    - 0.7-0.9: High confidence (detailed, specific symptoms with context)
-    - 0.9+: Very high confidence (detailed symptoms forming a clear pattern)
-
-    Return a JSON object:
-    {{
-    "confidence": 0.7,
-    "reasoning": "Brief explanation of the confidence score"
-    }}
-    """
-            # Use mini model to save costs
-            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False, temperature=0.3)  # Call the LLMHandler's method
+            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False, temperature=0.3)
             response_text = response_data.get("text", "")
-            
-            # Extract the JSON
-            import re
-            import json
             
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 try:
                     result = json.loads(json_match.group(0))
                     confidence = float(result.get("confidence", 0.3))
-                    # Ensure confidence is within valid range
                     confidence = max(0.0, min(1.0, confidence))
-                    
                     return {
                         "confidence": confidence,
                         "reasoning": result.get("reasoning", "No reasoning provided")
                     }
-                except (json.JSONDecodeError, ValueError):
-                    return {
-                        "confidence": 0.3,
-                        "reasoning": "Error parsing confidence calculation"
-                    }
+                except Exception as e:
+                    logger.error(f"Error parsing JSON: {e}")
+                    return {"confidence": 0.3, "reasoning": "Error parsing JSON"}
             
-            return {
-                "confidence": 0.3,
-                "reasoning": "Could not calculate confidence from LLM response"
-            }
-        
+            return {"confidence": 0.3, "reasoning": "No JSON found"}
         except Exception as e:
             logger.error(f"Error calculating diagnosis confidence: {str(e)}")
-            return {
-                "confidence": 0.2,
-                "reasoning": f"Error in confidence calculation: {str(e)}"
-            }
+            return {"confidence": 0.2, "reasoning": f"Exception: {e}"}
     
-
     async def update_diagnosis_confidence(self, patient_data: Dict[str, Any]) -> None:
         """
-        Update diagnosis confidence for patient data
-        
-        Args:
-            patient_data: The patient data dictionary
+        Update the patient_data's diagnosis confidence based on current symptoms
+        and how many follow-up questions were asked/answered.
         """
-        symptoms = self.get_symptoms_text(patient_data)
-        
-        # If we have no symptoms or just blank entries, set confidence to 0
-        if not symptoms or symptoms == "unknown symptoms":
-            patient_data["diagnosis_confidence"] = 0.0
-            patient_data["confidence_reasoning"] = "Insufficient information"
+        symptoms_str = self.get_symptoms_text(patient_data)
+        if not symptoms_str or symptoms_str == "unknown symptoms":
+            # No real symptoms => confidence = 0
+            patient_data["diagnosis"]["confidence"] = 0.0
+            patient_data["confidence_reasoning"] = "No valid symptoms"
             return
         
-        # Count how many questions we've asked
-        question_count = len(patient_data.get("asked_questions", []))
+        # If no follow-up questions asked, do a baseline
+        asked_questions = patient_data.get("asked_questions", [])
+        question_count = len(asked_questions)
         
-        # If we have symptoms but haven't asked any follow-up questions yet,
-        # set a minimum baseline confidence based on symptom count
         if question_count == 0:
-            symptom_count = len(patient_data.get("symptoms", []))
-            # Start with a low baseline confidence
-            baseline_confidence = min(0.1 * symptom_count, 0.4)
-            patient_data["diagnosis_confidence"] = baseline_confidence
-            patient_data["confidence_reasoning"] = "Initial symptoms provided, awaiting more details"
-            logger.info(f"Set baseline confidence: {baseline_confidence:.2f}")
+            # baseline
+            scount = len(patient_data["symptoms"])
+            baseline_conf = min(0.1 * scount, 0.4)
+            patient_data["diagnosis"]["confidence"] = baseline_conf
+            patient_data["confidence_reasoning"] = "Initial baseline confidence"
+            logger.info(f"Baseline confidence set to {baseline_conf:.2f}")
             return
         
-        # Otherwise, use the LLM to calculate confidence
-        confidence_data = await self.calculate_diagnosis_confidence(symptoms)  # Call local method instead
+        # Otherwise, call the LLM to compute confidence
+        conf_data = await self.calculate_diagnosis_confidence(symptoms_str)
+        confidence = conf_data.get("confidence", 0.0)
+        reasoning = conf_data.get("reasoning", "")
         
-        # Extract confidence and reasoning
-        confidence = confidence_data.get("confidence", 0.0)
-        reasoning = confidence_data.get("reasoning", "No reasoning available")
-        
-        patient_data["diagnosis_confidence"] = confidence
+        patient_data["diagnosis"]["confidence"] = confidence
         patient_data["confidence_reasoning"] = reasoning
         
-        logger.info(f"Updated diagnosis confidence: {confidence:.2f}")
-        logger.info(f"Confidence reasoning: {reasoning}")
+        logger.info(f"Diagnosis confidence updated to {confidence:.2f} with reasoning: {reasoning}")
     
     async def generate_followup_question(self, patient_data: Dict[str, Any]) -> str:
         """
-        Generate a follow-up question based on collected symptoms
-        
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            A follow-up question
+        Generate a follow-up question about the user's symptoms.
+        The question is appended to asked_questions in 'patient_data'.
         """
-        # Get current symptoms as a string
-        symptoms = self.get_symptoms_text(patient_data)
+        symptoms_str = self.get_symptoms_text(patient_data)
         
-        # Get previously asked questions
-        asked = self.get_asked_questions_text(patient_data)
+        # Create a simple textual representation of asked questions
+        # (In your code, each 'asked_question' is a dict, but for LLM prompt building
+        # we can just join them as text if we want.)
+        asked_list = patient_data.get("asked_questions", [])
+        asked_str = ", ".join(q["question"] for q in asked_list if isinstance(q, dict))
         
-        logger.info(f"Generating follow-up question about symptoms: {symptoms}")
+        logger.info(f"generate_followup_question for: {symptoms_str}")
         
+        question_text = "Can you tell me more about your symptoms?"
         if self.llm_handler.is_available():
             try:
-                # Create a prompt for follow-up questions
-                prompt = f"""As a medical assistant, I need to ask follow-up questions about the patient's symptoms.
-Current symptoms: {symptoms}
-Medical history: N/A
-Previously asked questions: {asked}
+                prompt = f"""I'm a medical assistant collecting more details.
+Current symptoms: {symptoms_str}
+Already asked: {asked_str}
 
-Generate a relevant follow-up question to better understand these symptoms."""
-
-                # Use mini model for follow-up questions to save cost
+Suggest one relevant follow-up question to clarify the patient's condition."""
+                
                 response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=False)
-                response = response_data.get("text", "")
-                
-                # Add this question to the list of asked questions
-                if response and "Error" not in response:
-                    patient_data["asked_questions"].append(response)
-                    
-                return response
+                possible_question = response_data.get("text", "").strip()
+                if possible_question:
+                    question_text = possible_question
             except Exception as e:
-                logger.error(f"Error generating follow-up questions with LLM: {str(e)}")
+                logger.error(f"Error generating followup question: {e}")
+        else:
+            logger.info("LLM not available, using fallback question text.")
         
-        # Use the plugin method or fallback
-        if self.medical_plugin:
-            try:
-                response = await self.medical_plugin.generate_followup_questions(
-                    current_symptoms=symptoms,
-                    medical_history="",
-                    previously_asked=asked
-                )
-                
-                # Record this question
-                patient_data["asked_questions"].append(str(response))
-                
-                return str(response)
-            except Exception as e:
-                logger.error(f"Error generating follow-up questions: {str(e)}")
+        # Record it in asked_questions with timestamps
+        asked_dict = {
+            "question": question_text,
+            "answer": "",
+            "timestamp_asked": current_utc_timestamp(),
+            "timestamp_answered": ""
+        }
+        asked_list.append(asked_dict)
         
-        # Last resort fallback
-        fallback_response = "Can you tell me more about your symptoms? When did they start and have they changed over time?"
-        logger.info(f"Using fallback response for follow-up questions")
-        patient_data["asked_questions"].append(fallback_response)
-        return fallback_response
+        # Save back
+        patient_data["asked_questions"] = asked_list
+        
+        return question_text
     
     async def verify_symptoms(self, patient_data: Dict[str, Any]) -> str:
         """
-        Verify collected symptoms with the patient before diagnosis
-        
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            Verification response
+        If confidence >= 0.85, try a 'verifier model'. If it agrees, finalize the diagnosis.
+        Otherwise, produce a question to confirm the listed symptoms.
         """
-        symptoms = self.get_symptoms_text(patient_data)
-        confidence = patient_data.get("diagnosis_confidence", 0.0)
+        symptoms_str = self.get_symptoms_text(patient_data)
+        diagnosis_data = patient_data.get("diagnosis", {})
+        confidence = float(diagnosis_data.get("confidence", 0.0))
         
-        # Determine if we should use the verifier model (for high confidence cases)
-        use_verifier = confidence >= 0.9 and self.llm_handler.is_verifier_model_available()
+        # 0.85 is the new threshold
+        use_verifier = confidence >= 0.85 and self.llm_handler.is_verifier_model_available()
         
-        if self.llm_handler.is_available() and (self.llm_handler.is_full_model_available() or use_verifier):
+        if use_verifier:
+            logger.info(f"Confidence {confidence:.2f} >= 0.85, using verifier model")
             try:
-                prompt = f"""Based on our conversation, I understand you're experiencing these symptoms:
-    {symptoms}
+                # Prompt the verifier to confirm
+                prompt = f"""We have collected these symptoms:
+{symptoms_str}
 
-    I want to make sure I understand correctly before providing my assessment.
-    Please review these symptoms and let me know if this accurately represents what you're experiencing, 
-    or if there's anything I've missed or misunderstood.
-
-    Format your response as a direct question to the patient that summarizes the symptoms and asks for confirmation."""
+We have a tentative diagnosis with confidence {confidence:.2f}.
+Please confirm if this is correct, or refine it. 
+Return a JSON object with "verification": "agree" or "disagree",
+optionally "diagnosis_name" for a refined name, 
+and "notes" for extra detail.
+"""
+                resp = await self.llm_handler.execute_prompt(prompt, use_verifier_model=True)
+                text = resp.get("text", "")
+                patient_data["verification_model"] = resp.get("model", "verifier_unknown")
                 
-                if use_verifier:
-                    logger.info(f"Using verifier model for high-confidence symptom verification ({confidence:.2f})")
-                    response_data = await self.llm_handler.execute_prompt(prompt, use_verifier_model=True)
+                # Parse JSON
+                jmatch = re.search(r'\{.*\}', text, re.DOTALL)
+                if jmatch:
+                    data = json.loads(jmatch.group(0))
+                    verification = data.get("verification", "disagree")
+                    if verification.lower() == "agree":
+                        # If the verifier agrees, we can finalize
+                        diag_name = data.get("diagnosis_name", "ConfirmedDiagnosis")
+                        diagnosis_data["name"] = diag_name
+                        # We keep confidence as is
+                        patient_data["diagnosis"] = diagnosis_data
+                        
+                        # Return a direct statement that the diagnosis is confirmed
+                        return f"I've confirmed your symptoms likely represent: {diag_name}. We will proceed with that assessment."
+                    else:
+                        # Verifier disagrees -> we ask more
+                        return f"The verifier model suggests we need more info or there's a mismatch. Please clarify any missing or incorrect symptom details."
                 else:
-                    # Use full model for normal verification
-                    response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
-                
-                # Store which model was used for verification
-                patient_data["verification_model"] = response_data.get("model", "unknown")
-                
-                return response_data.get("text", "")
+                    return f"I tried verifying your symptoms at {confidence:.2f} confidence, but couldn't parse the verifier's response. Let's clarify further."
             except Exception as e:
-                logger.error(f"Error verifying symptoms with LLM: {str(e)}")
-        
-        # Simple fallback
-        return f"I understand you're experiencing: {symptoms}. Is that correct, or would you like to add any other symptoms before I provide my assessment?"
-    
+                logger.error(f"Error verifying with the specialized model: {e}")
+                return f"An error occurred while verifying your symptoms. Let's clarify: Do these symptoms accurately describe your condition: {symptoms_str}?"
+        else:
+            # Normal or fallback verification
+            # Just produce a question asking the user to confirm
+            return f"I understand you're experiencing: {symptoms_str} (Confidence: {confidence:.2f}). Please confirm if this is accurate or if anything is missing."
+
     async def suggest_mitigations(self, patient_data: Dict[str, Any]) -> str:
         """
-        Suggest mitigations based on diagnosis
-        
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            Mitigation suggestions
+        Suggest mitigations based on the (final) diagnosis
         """
-        diagnosis = patient_data.get("diagnosis", "")
-        symptoms = self.get_symptoms_text(patient_data)
+        diag_info = patient_data.get("diagnosis", {})
+        diag_name = diag_info.get("name", None)
+        conf_val = diag_info.get("confidence", 0.0)
+        sym_str = self.get_symptoms_text(patient_data)
         
-        if not diagnosis or diagnosis == "unknown":
-            return "Without a clear understanding of your condition, I'd recommend rest, staying hydrated, and consulting with a healthcare provider if your symptoms persist or worsen."
+        if not diag_name or diag_name == "unknown":
+            return ("I do not have enough to determine a specific diagnosis yet. "
+                    "A general recommendation is rest, hydration, and consult a healthcare provider if symptoms worsen.")
         
         if self.llm_handler.is_available():
             try:
-                prompt = f"""Based on this potential diagnosis: 
-"{diagnosis}"
+                prompt = f"""Diagnosis: {diag_name} (confidence {conf_val:.2f})
+Symptoms: {sym_str}
 
-And these symptoms:
-"{symptoms}"
-
-Suggest appropriate general care measures or mitigations that might help the patient.
-Focus on evidence-based, conservative recommendations.
-Emphasize these are general suggestions and not a replacement for professional medical care."""
-
-                # Use full model for mitigations if available
-                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
-                
-                return response_data.get("text", "")
+Suggest general care or mitigations, emphasizing this is not a substitute for professional care."""
+                rdata = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                return rdata.get("text", "")
             except Exception as e:
-                logger.error(f"Error generating mitigations: {str(e)}")
+                logger.error(f"Error generating mitigations: {e}")
         
-        # Fallback
-        return "Here are some general steps you might consider: rest, stay hydrated, and monitor your symptoms. If they worsen, please consult with your healthcare provider."
+        return ("Here's a general suggestion: get rest, stay hydrated, track any changes in symptoms, and follow up with a healthcare provider if needed.")
+
