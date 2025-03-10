@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class LLMHandler:
     """
-    Handles interactions with language models using the latest Semantic Kernel approach.
+    Handles interactions with language models using Semantic Kernel.
     """
 
     def __init__(self):
@@ -42,8 +42,8 @@ class LLMHandler:
                 api_version="2024-06-01"
             )
 
-            # Register using `kernel.add_service`
-            self.kernel.add_service("chat", "mini", mini_service)
+            # Corrected: Use only 2 arguments (service + service_id)
+            self.kernel.add_service(mini_service, service_id="mini")
             logger.info("Registered 'mini' chat service with deployment: gpt-4o-mini")
 
             # "full" model for advanced usage
@@ -54,7 +54,7 @@ class LLMHandler:
                 api_version="2024-06-01"
             )
 
-            self.kernel.add_service("chat", "full", full_service)
+            self.kernel.add_service(full_service, service_id="full")
             logger.info("Registered 'full' chat service with deployment: gpt-4o")
 
         except Exception as e:
@@ -63,11 +63,11 @@ class LLMHandler:
 
     def is_available(self) -> bool:
         """Check if the 'mini' LLM service is available"""
-        return "mini" in self.kernel.get_services("chat")
+        return self.kernel.has_service("mini")
 
     def is_full_model_available(self) -> bool:
         """Check if the 'full' LLM service is available"""
-        return "full" in self.kernel.get_services("chat")
+        return self.kernel.has_service("full")
 
     async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
@@ -82,7 +82,7 @@ class LLMHandler:
             A dictionary containing response text, model, and endpoint details.
         """
         service_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
-        service = self.kernel.get_service("chat", service_id)
+        service = self.kernel.get_service(service_id)
 
         if not service:
             return {
