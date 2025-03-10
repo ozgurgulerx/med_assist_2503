@@ -1,6 +1,6 @@
 """
 Main entry point for the Medical Assistant bot - API server and CLI
-With enhanced logging for troubleshooting -working
+With enhanced logging for troubleshooting -working-
 """
 import os
 import asyncio
