@@ -281,21 +281,27 @@ Provide a concise (2-3 sentence) summary of this user's context.
         context_model = f"{user_context.get('model', 'unknown')}/{user_context.get('deployment', 'unknown')}"
         response_model = f"{model_info.get('model', 'unknown')}/{model_info.get('deployment', 'unknown')}"
         
+        # Extract specialized model information
+        diagnosis_model = patient_data.get("diagnosis_model", "Not yet used")
+        verification_model = patient_data.get("verification_model", "Not yet used")
+        
         # Format the diagnostic information
         diagnostic_info = f"""
---------- DIAGNOSTIC INFORMATION ---------
-User Context: {user_context.get('text', 'None')}
-Current State: {current_state}
-Last Intent: {intent}
-Symptoms: {symptoms_text}
-Diagnosis Confidence: {confidence_text}
-Confidence Reasoning: {confidence_reasoning}
+    --------- DIAGNOSTIC INFORMATION ---------
+    User Context: {user_context.get('text', 'None')}
+    Current State: {current_state}
+    Last Intent: {intent}
+    Symptoms: {symptoms_text}
+    Diagnosis Confidence: {confidence_text}
+    Confidence Reasoning: {confidence_reasoning}
 
-Models Used:
-- Context Generation: {context_model}
-- Response Generation: {response_model}
-----------------------------------------
-"""
+    Models Used:
+    - Context Generation: {context_model}
+    - Response Generation: {response_model}
+    - Diagnosis: {diagnosis_model}
+    - Verification: {verification_model}
+    ----------------------------------------
+    """
         return diagnostic_info
         
     async def process_message(self, user_id: str, message: str, include_diagnostics: bool = True) -> str:

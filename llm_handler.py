@@ -39,7 +39,7 @@ class LLMHandler:
         try:
             # "mini" model for quick usage
             mini_service = AzureChatCompletion(
-                deployment_name="gpt-4o-mini",
+                deployment_name="gpt-4o",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
@@ -47,19 +47,28 @@ class LLMHandler:
 
             # "full" model for advanced usage
             full_service = AzureChatCompletion(
-                deployment_name="gpt-4o",
+                deployment_name="o3-mini",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version="2024-06-01"
+                api_version="2025-01-01-preview"
+            )
+            
+            # "verifier" model for high-confidence verification
+            verifier_service = AzureChatCompletion(
+                deployment_name="o1",  # Assuming this is the model name you want to use
+                endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version="2025-01-01-preview"
             )
 
             # Manually store chat services
             self.kernel.services["chat"] = {
                 "mini": mini_service,
-                "full": full_service
+                "full": full_service,
+                "verifier": verifier_service
             }
             
-            logger.info("Registered 'mini' and 'full' chat services.")
+            logger.info("Registered 'mini', 'full', and 'verifier' chat services.")
 
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")
@@ -72,20 +81,33 @@ class LLMHandler:
     def is_full_model_available(self) -> bool:
         """Check if the 'full' LLM service is available"""
         return "chat" in self.kernel.services and "full" in self.kernel.services["chat"]
+        
+    def is_verifier_model_available(self) -> bool:
+        """Check if the 'verifier' LLM service is available"""
+        return "chat" in self.kernel.services and "verifier" in self.kernel.services["chat"]
 
-    async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
+    async def execute_prompt(self, prompt: str, use_full_model: bool = False, 
+                            use_verifier_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
         Execute a prompt using the selected LLM.
 
         Args:
             prompt: The input text.
             use_full_model: Whether to use the full model instead of mini.
+            use_verifier_model: Whether to use the verifier model (highest quality).
             temperature: Generation temperature.
 
         Returns:
             A dictionary containing response text, model, and endpoint details.
         """
-        service_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
+        # Determine which service to use
+        if use_verifier_model and self.is_verifier_model_available():
+            service_id = "verifier"
+        elif use_full_model and self.is_full_model_available():
+            service_id = "full"
+        else:
+            service_id = "mini"
+            
         service = self.kernel.services["chat"].get(service_id)
 
         if not service:

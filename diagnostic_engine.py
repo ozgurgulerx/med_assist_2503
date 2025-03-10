@@ -327,20 +327,31 @@ Generate a relevant follow-up question to better understand these symptoms."""
             Verification response
         """
         symptoms = self.get_symptoms_text(patient_data)
+        confidence = patient_data.get("diagnosis_confidence", 0.0)
         
-        if self.llm_handler.is_available() and self.llm_handler.is_full_model_available():
+        # Determine if we should use the verifier model (for high confidence cases)
+        use_verifier = confidence >= 0.9 and self.llm_handler.is_verifier_model_available()
+        
+        if self.llm_handler.is_available() and (self.llm_handler.is_full_model_available() or use_verifier):
             try:
                 prompt = f"""Based on our conversation, I understand you're experiencing these symptoms:
-{symptoms}
+    {symptoms}
 
-I want to make sure I understand correctly before providing my assessment.
-Please review these symptoms and let me know if this accurately represents what you're experiencing, 
-or if there's anything I've missed or misunderstood.
+    I want to make sure I understand correctly before providing my assessment.
+    Please review these symptoms and let me know if this accurately represents what you're experiencing, 
+    or if there's anything I've missed or misunderstood.
 
-Format your response as a direct question to the patient that summarizes the symptoms and asks for confirmation."""
+    Format your response as a direct question to the patient that summarizes the symptoms and asks for confirmation."""
                 
-                # Always use full model for verification
-                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                if use_verifier:
+                    logger.info(f"Using verifier model for high-confidence symptom verification ({confidence:.2f})")
+                    response_data = await self.llm_handler.execute_prompt(prompt, use_verifier_model=True)
+                else:
+                    # Use full model for normal verification
+                    response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
+                
+                # Store which model was used for verification
+                patient_data["verification_model"] = response_data.get("model", "unknown")
                 
                 return response_data.get("text", "")
             except Exception as e:
@@ -348,73 +359,6 @@ Format your response as a direct question to the patient that summarizes the sym
         
         # Simple fallback
         return f"I understand you're experiencing: {symptoms}. Is that correct, or would you like to add any other symptoms before I provide my assessment?"
-    
-    async def generate_diagnosis(self, patient_data: Dict[str, Any]) -> str:
-        """
-        Generate a diagnosis based on symptoms and confidence
-        
-        Args:
-            patient_data: The patient data dictionary
-            
-        Returns:
-            Diagnosis text
-        """
-        symptoms = self.get_symptoms_text(patient_data)
-        confidence = patient_data.get("diagnosis_confidence", 0.0)
-        
-        # Get confidence description based on level
-        confidence_str = ""
-        if confidence >= 0.8:
-            confidence_str = "I have high confidence in this assessment based on the specific symptoms you've described."
-        elif confidence >= 0.5:
-            confidence_str = "I have moderate confidence in this assessment, but would recommend professional medical advice to confirm."
-        else:
-            confidence_str = "While I can provide some possibilities, my confidence is limited with the current information. I strongly recommend consulting a healthcare professional."
-        
-        logger.info(f"Generating diagnosis based on symptoms: {symptoms} (confidence: {confidence:.2f})")
-        
-        if self.llm_handler.is_available():
-            try:
-                # Create a prompt for diagnosis that includes confidence
-                prompt = f"""Based on these symptoms: {symptoms}, what might be the diagnosis?
-My current confidence level in making this diagnosis is {confidence:.2f} out of 1.0.
-
-Provide a thoughtful analysis considering multiple possibilities.
-Be responsible and remind the patient this is not a substitute for professional medical diagnosis.
-Adjust your language to reflect my confidence level - be more cautious with lower confidence."""
-
-                # Always use full model for diagnosis if available
-                response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True)
-                response = response_data.get("text", "")
-                
-                # Store the diagnosis
-                patient_data["diagnosis"] = response
-                
-                # Add confidence statement
-                return f"{response}\n\n{confidence_str}"
-            except Exception as e:
-                logger.error(f"Error providing diagnosis with LLM: {str(e)}")
-        
-        # Use the plugin method or fallback
-        if self.medical_plugin:
-            try:
-                response = await self.medical_plugin.analyze_medical_query(
-                    query=f"Based on these symptoms: {symptoms}, what might be the diagnosis?",
-                    patient_context=""
-                )
-                
-                # Store the diagnosis
-                patient_data["diagnosis"] = str(response)
-                
-                return f"{str(response)}\n\n{confidence_str}"
-            except Exception as e:
-                logger.error(f"Error providing diagnosis: {str(e)}")
-        
-        # Last resort fallback
-        fallback_response = "Based on the symptoms you've described, I'd recommend consulting with a healthcare provider for a proper evaluation. Your symptoms could have various causes."
-        logger.info(f"Using fallback response for diagnosis")
-        patient_data["diagnosis"] = fallback_response
-        return f"{fallback_response}\n\n{confidence_str}"
     
     async def suggest_mitigations(self, patient_data: Dict[str, Any]) -> str:
         """
