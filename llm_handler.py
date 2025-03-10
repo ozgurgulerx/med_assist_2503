@@ -16,43 +16,43 @@ logger = logging.getLogger(__name__)
 
 class LLMHandler:
     """
-    Handles interactions with language models, following 
-    the recommended SK 1.23+ approach for multiple services.
+    Handles interactions with language models using Semantic Kernel 1.23+ style.
     """
 
     def __init__(self):
         """Initialize the LLM handler"""
-        # 1) Create a Kernel that supports adding named chat services
+        # Create a Kernel instance.
         self.kernel = Kernel()
 
-        # 2) Configure the prompt execution settings
+        # Configure the prompt execution settings.
         self.execution_settings = AzureChatPromptExecutionSettings()
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
 
-        # 3) Register two named chat services onto the kernel
+        # Register chat services using the updated API.
         self.setup_chat_services()
 
     def setup_chat_services(self):
         """Set up Azure OpenAI chat services and register them with the kernel."""
         try:
-            # "mini" model for quick usage
+            # "mini" model for quick usage.
             mini_service = AzureChatCompletion(
                 deployment_name="gpt-4o-mini",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            self.kernel.add_chat_service("mini", mini_service)
+            # Register by directly assigning to the kernel's chat_services dictionary.
+            self.kernel.chat_services["mini"] = mini_service
             logger.info("Registered 'mini' chat service with deployment: gpt-4o-mini")
 
-            # "full" model for advanced usage
+            # "full" model for advanced usage.
             full_service = AzureChatCompletion(
                 deployment_name="gpt-4o",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            self.kernel.add_chat_service("full", full_service)
+            self.kernel.chat_services["full"] = full_service
             logger.info("Registered 'full' chat service with deployment: gpt-4o")
 
         except Exception as e:
@@ -61,29 +61,30 @@ class LLMHandler:
 
     def is_available(self) -> bool:
         """Check if the 'mini' LLM service is available"""
-        mini_service = self.kernel.get_chat_service("mini")
+        mini_service = self.kernel.chat_services.get("mini")
         return mini_service is not None
 
     def is_full_model_available(self) -> bool:
         """Check if the 'full' LLM service is available"""
-        full_service = self.kernel.get_chat_service("full")
+        full_service = self.kernel.chat_services.get("full")
         return full_service is not None
 
     async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
         Execute a direct prompt to the chosen LLM service.
-        
+
         Args:
             prompt: The text prompt to send to the LLM.
             use_full_model: Whether to use the 'full' model instead of 'mini'.
             temperature: The temperature setting for generation.
-            
+
         Returns:
             Dict containing the response text, model info, and endpoint deployment.
         """
-        # 4) Decide which service ID to use: "full" or "mini"
+        # Decide which service ID to use.
         service_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
-        service = self.kernel.get_chat_service(service_id)
+        # Retrieve the service from the chat_services dictionary.
+        service = self.kernel.chat_services.get(service_id)
         if not service:
             return {
                 "text": "No chat service available for that model.",
@@ -95,15 +96,15 @@ class LLMHandler:
             logger.info(f"LLM prompt using '{service_id}' service: {prompt[:100]}...")
             self.execution_settings.temperature = temperature
 
-            # Create a temporary chat history for this prompt
+            # Create a temporary chat history for this prompt.
             chat_history = ChatHistory()
             chat_history.add_user_message(prompt)
 
-            # 5) Get an LLM response from the chosen chat service
+            # Get an LLM response from the chosen chat service.
             result = await service.get_chat_message_content(
                 chat_history=chat_history,
                 settings=self.execution_settings,
-                kernel=self.kernel  # needed for function-calling or plugin usage
+                kernel=self.kernel  # required for function-calling or plugin usage
             )
 
             response_text = str(result)
@@ -125,12 +126,12 @@ class LLMHandler:
     async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
         Calculate confidence in diagnosis through self-reflection, using the 'full' model if available.
-        
+
         Args:
-            symptoms: A string describing the patient's symptoms
-            
+            symptoms: A string describing the patient's symptoms.
+
         Returns:
-            Dictionary with confidence score, reasoning, model info, and deployment info
+            Dictionary with confidence score, reasoning, model info, and deployment info.
         """
         if not self.is_available() or not symptoms or symptoms == "unknown symptoms":
             return {
@@ -157,7 +158,7 @@ Return ONLY a JSON object in this format:
   "reasoning": "Short explanation"
 }}"""
 
-            # Use the full model if available, else fallback to 'mini'
+            # Use the full model if available, else fallback to 'mini'.
             response_data = await self.execute_prompt(prompt, use_full_model=True, temperature=0.3)
             response_text = response_data.get("text", "")
 
@@ -179,7 +180,7 @@ Return ONLY a JSON object in this format:
                 except (json.JSONDecodeError, ValueError) as ex:
                     logger.error(f"Error parsing confidence result: {str(ex)}")
 
-            # Fallback if no valid JSON object was found in the LLM's answer
+            # Fallback if no valid JSON object was found in the LLM's answer.
             symptom_count = len(symptoms.split(','))
             fallback_confidence = min(0.3 + (symptom_count * 0.1), 0.7)
             fallback_reasoning = "Based on symptom count only."
