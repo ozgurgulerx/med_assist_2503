@@ -16,106 +16,102 @@ logger = logging.getLogger(__name__)
 
 class LLMHandler:
     """
-    Handles interactions with language models.
+    Handles interactions with language models, following 
+    the recommended SK 1.23+ approach for multiple services.
     """
 
     def __init__(self):
         """Initialize the LLM handler"""
-        # Initialize Semantic Kernel
-        self.kernel = Kernel()  # We won't register chat services here
+        # 1) Create a Kernel that supports adding named chat services
+        self.kernel = Kernel()
 
-        # Configure execution settings
+        # 2) Configure the prompt execution settings
         self.execution_settings = AzureChatPromptExecutionSettings()
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
 
-        # Initialize chat services as simple instance attributes
-        self.chat_service = None
-        self.full_model_service = None
+        # 3) Register two named chat services onto the kernel
         self.setup_chat_services()
 
     def setup_chat_services(self):
-        """Set up Azure OpenAI chat services"""
+        """Set up Azure OpenAI chat services and register them with the kernel."""
         try:
-            # Create the 'mini' model service (lightweight)
-            self.chat_service = AzureChatCompletion(
-                deployment_name="gpt-4o",
+            # "mini" model for quick usage
+            mini_service = AzureChatCompletion(
+                deployment_name="gpt-4o-mini",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            logger.info("Initialized Azure OpenAI 'mini' chat service with deployment: gpt-4o")
+            self.kernel.add_chat_service("mini", mini_service)
+            logger.info("Registered 'mini' chat service with deployment: gpt-4o-mini")
 
-            # Create the 'full' model service (larger, for more advanced usage)
-            self.full_model_service = AzureChatCompletion(
+            # "full" model for advanced usage
+            full_service = AzureChatCompletion(
                 deployment_name="gpt-4o",
                 endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            logger.info("Initialized Azure OpenAI 'full' chat service with deployment: gpt-4o")
+            self.kernel.add_chat_service("full", full_service)
+            logger.info("Registered 'full' chat service with deployment: gpt-4o")
 
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")
-            logger.warning("The bot will continue with fallback responses instead of actual LLM calls")
-            self.chat_service = None
-            self.full_model_service = None
+            logger.warning("Will fallback to minimal or no LLM responses if not available.")
 
     def is_available(self) -> bool:
-        """Check if the LLM service is available"""
-        return self.chat_service is not None
+        """Check if the 'mini' LLM service is available"""
+        mini_service = self.kernel.get_chat_service("mini")
+        return mini_service is not None
 
     def is_full_model_available(self) -> bool:
-        """Check if the full model service is available"""
-        return self.full_model_service is not None
+        """Check if the 'full' LLM service is available"""
+        full_service = self.kernel.get_chat_service("full")
+        return full_service is not None
 
     async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
-        Execute a direct prompt to the LLM
+        Execute a direct prompt to the chosen LLM service.
         
         Args:
-            prompt: The prompt to send to the LLM
-            use_full_model: Whether to use the full model instead of mini
-            temperature: The temperature setting for generation
+            prompt: The text prompt to send to the LLM.
+            use_full_model: Whether to use the 'full' model instead of 'mini'.
+            temperature: The temperature setting for generation.
             
         Returns:
-            Dictionary containing the response text and model info
+            Dict containing the response text, model info, and endpoint deployment.
         """
-        # Choose the appropriate service
-        if use_full_model and self.is_full_model_available():
-            service = self.full_model_service
-            model_id = "full"
-        else:
-            service = self.chat_service
-            model_id = "mini"
-
+        # 4) Decide which service ID to use: "full" or "mini"
+        service_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
+        service = self.kernel.get_chat_service(service_id)
         if not service:
             return {
-                "text": "LLM service not available.",
+                "text": "No chat service available for that model.",
                 "model": "None",
                 "deployment": "None"
             }
 
         try:
-            logger.info(f"Direct LLM prompt ({model_id}): {prompt[:100]}...")
+            logger.info(f"LLM prompt using '{service_id}' service: {prompt[:100]}...")
             self.execution_settings.temperature = temperature
 
-            # Create temporary chat history
+            # Create a temporary chat history for this prompt
             chat_history = ChatHistory()
             chat_history.add_user_message(prompt)
 
-            # Get LLM response directly from the chosen service
+            # 5) Get an LLM response from the chosen chat service
             result = await service.get_chat_message_content(
                 chat_history=chat_history,
                 settings=self.execution_settings,
-                kernel=self.kernel  # kernel used for function-call logic, if needed
+                kernel=self.kernel  # needed for function-calling or plugin usage
             )
 
             response_text = str(result)
-            logger.info(f"Direct LLM response ({model_id}): {response_text[:100]}...")
+            logger.info(f"LLM response ({service_id}): {response_text[:100]}...")
 
             return {
                 "text": response_text,
-                "model": model_id,
+                "model": service_id,
                 "deployment": os.getenv("AZURE_OPENAI_ENDPOINT", "unknown")
             }
         except Exception as e:
@@ -128,18 +124,18 @@ class LLMHandler:
 
     async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
-        Calculate confidence in diagnosis through self-reflection
+        Calculate confidence in diagnosis through self-reflection, using the 'full' model if available.
         
         Args:
-            symptoms: String containing all symptoms
+            symptoms: A string describing the patient's symptoms
             
         Returns:
-            Dictionary with confidence score, reasoning, and model info
+            Dictionary with confidence score, reasoning, model info, and deployment info
         """
         if not self.is_available() or not symptoms or symptoms == "unknown symptoms":
             return {
                 "confidence": 0.0,
-                "reasoning": "Insufficient information",
+                "reasoning": "Insufficient information provided",
                 "model": "none",
                 "deployment": "none"
             }
@@ -149,23 +145,19 @@ class LLMHandler:
 "{symptoms}"
 
 Perform a self-reflection analysis and determine:
-1. How specific are these symptoms? (Specific symptoms increase confidence)
-2. Are there multiple potential causes for these symptoms? (More potential causes decreases confidence)
-3. Is there enough information to make a reasonable diagnosis? (More information increases confidence)
-4. How severe or concerning are these symptoms? (Higher severity requires higher confidence)
+1. How specific are these symptoms? (Specific symptoms = higher confidence)
+2. Are there multiple potential causes? (More potential causes = lower confidence)
+3. Is there enough information for a decent diagnosis? (More data = higher confidence)
+4. How severe are these symptoms? (More severe = higher threshold required)
 
-Based on this analysis, estimate your confidence in making a diagnosis on a scale from 0.0 to 1.0.
-0.0 = Complete uncertainty (impossible to diagnose)
-0.5 = Moderate confidence (several potential diagnoses)
-1.0 = Very high confidence (clear diagnostic pattern)
-
-Return ONLY a JSON object with this format:
+Finally, estimate the confidence in making a diagnosis from 0.0 to 1.0.
+Return ONLY a JSON object in this format:
 {{
   "confidence": 0.7,
-  "reasoning": "Brief explanation of confidence level"
+  "reasoning": "Short explanation"
 }}"""
 
-            # Use the full model if available, otherwise the fallback
+            # Use the full model if available, else fallback to 'mini'
             response_data = await self.execute_prompt(prompt, use_full_model=True, temperature=0.3)
             response_text = response_data.get("text", "")
 
@@ -174,24 +166,24 @@ Return ONLY a JSON object with this format:
                 try:
                     result = json.loads(match.group(0))
                     confidence = float(result.get("confidence", 0.0))
-                    reasoning = result.get("reasoning", "No reasoning provided")
+                    reasoning = result.get("reasoning", "No reasoning")
                     confidence = max(0.0, min(confidence, 1.0))
-                    logger.info(f"Diagnosis confidence: {confidence:.2f} - {reasoning}")
 
+                    logger.info(f"Diagnosis confidence: {confidence:.2f} - {reasoning}")
                     return {
                         "confidence": confidence,
                         "reasoning": reasoning,
                         "model": response_data.get("model", "unknown"),
                         "deployment": response_data.get("deployment", "unknown")
                     }
-                except (json.JSONDecodeError, ValueError) as e:
-                    logger.error(f"Error parsing confidence result: {str(e)}")
+                except (json.JSONDecodeError, ValueError) as ex:
+                    logger.error(f"Error parsing confidence result: {str(ex)}")
 
-            # Fallback estimate if no valid JSON object was found
+            # Fallback if no valid JSON object was found in the LLM's answer
             symptom_count = len(symptoms.split(','))
             fallback_confidence = min(0.3 + (symptom_count * 0.1), 0.7)
-            fallback_reasoning = "Based on the number of symptoms provided"
-            logger.warning(f"Using fallback confidence: {fallback_confidence:.2f}")
+            fallback_reasoning = "Based on symptom count only."
+            logger.warning(f"Fallback confidence: {fallback_confidence:.2f}")
 
             return {
                 "confidence": fallback_confidence,
@@ -204,7 +196,7 @@ Return ONLY a JSON object with this format:
             logger.error(f"Error in confidence calculation: {str(e)}")
             return {
                 "confidence": 0.2,
-                "reasoning": f"Error: {str(e)}",
+                "reasoning": f"Error in LLM or code: {str(e)}",
                 "model": "error",
                 "deployment": "none"
             }
