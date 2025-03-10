@@ -259,3 +259,29 @@ class DialogManager:
             self.set_user_state(user_id, "verification")
 
         return should_verify
+
+    def get_previous_state(self, user_id: str) -> str:
+        """
+        Get the previous dialog state for a user before they went out-of-scope.
+        
+        Args:
+            user_id: The user's identifier
+            
+        Returns:
+            The previous state or empty string if not found
+        """
+        return self.user_state_history.get(user_id, "")
+
+    def reset_user_state(self, user_id: str) -> None:
+        """
+        Reset the user state to greeting and clear any history.
+        
+        Args:
+            user_id: The user's identifier
+        """
+        self.user_states[user_id] = "greeting"
+        if user_id in self.user_state_history:
+            del self.user_state_history[user_id]
+        if user_id in self.original_messages:
+            del self.original_messages[user_id]
+        logger.info(f"Reset state for user {user_id} to greeting")

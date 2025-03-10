@@ -120,11 +120,11 @@ async def main():
         
         # 2. Out-of-scope handling during symptom collection
         TestScenario(
-            name="Out-of-Scope Handling",
+            name="Out-of-Scope Handling with Re-asking Questions",
             messages=[
                 "Hello",
                 "I have a sore throat",
-                "What's the weather like today?",  # Out-of-scope
+                "What's the weather like today?",  # Out-of-scope - should re-ask about symptoms
                 "My throat hurts when I swallow",
                 "Yes, and I have a slight fever"
             ],
