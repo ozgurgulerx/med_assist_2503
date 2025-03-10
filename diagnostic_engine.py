@@ -301,32 +301,42 @@ Format: Return ONLY the question, without any prefixes or additional text."""
     
     async def verify_symptoms(self, patient_data: Dict[str, Any]) -> str:
         """
-        If confidence >= 0.85, try a 'verifier model'. If it agrees, finalize the diagnosis.
-        Otherwise, produce a question to confirm the listed symptoms.
+        Verify symptoms using the verifier model (O1).
+        
+        This method handles two cases:
+        1. High confidence (>=0.85): Verify if the diagnosis is correct
+        2. Low confidence (<0.85): Explain why symptoms don't fit a known condition 
+           and recommend medical consultation
         """
         symptoms_str = self.get_symptoms_text(patient_data)
         diagnosis_data = patient_data.get("diagnosis", {})
         confidence = float(diagnosis_data.get("confidence", 0.0))
+        verification_trigger = patient_data.get("verification_info", {}).get("trigger_reason", "unknown")
         
-        # 0.85 is the new threshold
-        use_verifier = confidence >= 0.85 and self.llm_handler.is_verifier_model_available()
+        # Check if verifier model is available
+        if not self.llm_handler.is_verifier_model_available():
+            logger.warning("Verifier model not available, using fallback verification")
+            return f"I understand you're experiencing: {symptoms_str} (Confidence: {confidence:.2f}). Please confirm if this is accurate or if anything is missing."
         
-        if use_verifier:
-            logger.info(f"Confidence {confidence:.2f} >= 0.85, using verifier model")
-            try:
-                # Prompt the verifier to confirm
+        try:
+            # Record which model was used for verification
+            patient_data["verification_model"] = "O1/medical-verification"
+            
+            if verification_trigger == "high_confidence":
+                # High confidence case (>=0.85) - verify the diagnosis
+                logger.info(f"High confidence verification ({confidence:.2f} >= 0.85), using verifier model")
+                
                 prompt = f"""We have collected these symptoms:
 {symptoms_str}
 
-We have a tentative diagnosis with confidence {confidence:.2f}.
-Please confirm if this is correct, or refine it. 
+We have a tentative diagnosis of {diagnosis_data.get('name', 'Unknown')} with confidence {confidence:.2f}.
+Please confirm if this diagnosis is correct, or refine it. 
 Return a JSON object with "verification": "agree" or "disagree",
 optionally "diagnosis_name" for a refined name, 
 and "notes" for extra detail.
 """
                 resp = await self.llm_handler.execute_prompt(prompt, use_verifier_model=True)
                 text = resp.get("text", "")
-                patient_data["verification_model"] = resp.get("model", "verifier_unknown")
                 
                 # Parse JSON
                 jmatch = re.search(r'\{.*\}', text, re.DOTALL)
@@ -335,7 +345,7 @@ and "notes" for extra detail.
                     verification = data.get("verification", "disagree")
                     if verification.lower() == "agree":
                         # If the verifier agrees, we can finalize
-                        diag_name = data.get("diagnosis_name", "ConfirmedDiagnosis")
+                        diag_name = data.get("diagnosis_name", diagnosis_data.get("name", "ConfirmedDiagnosis"))
                         diagnosis_data["name"] = diag_name
                         # We keep confidence as is
                         patient_data["diagnosis"] = diagnosis_data
@@ -344,17 +354,45 @@ and "notes" for extra detail.
                         return f"I've confirmed your symptoms likely represent: {diag_name}. We will proceed with that assessment."
                     else:
                         # Verifier disagrees -> we ask more
-                        return f"The verifier model suggests we need more info or there's a mismatch. Please clarify any missing or incorrect symptom details."
+                        return f"The verifier model suggests we need more information. Please clarify any missing or incorrect symptom details."
                 else:
-                    return f"I tried verifying your symptoms at {confidence:.2f} confidence, but couldn't parse the verifier's response. Let's clarify further."
-            except Exception as e:
-                logger.error(f"Error verifying with the specialized model: {e}")
-                return f"An error occurred while verifying your symptoms. Let's clarify: Do these symptoms accurately describe your condition: {symptoms_str}?"
-        else:
-            # Normal or fallback verification
-            # Just produce a question asking the user to confirm
-            return f"I understand you're experiencing: {symptoms_str} (Confidence: {confidence:.2f}). Please confirm if this is accurate or if anything is missing."
+                    logger.warning("Could not parse JSON from verifier model response")
+                    return f"I need to verify your symptoms further. Can you confirm if these accurately describe your condition: {symptoms_str}?"
+            
+            else:  # Low confidence case
+                # Low confidence case (<0.85) - explain why symptoms don't fit a known condition
+                logger.info(f"Low confidence verification ({confidence:.2f} < 0.85), using verifier model for explanation")
+                
+                prompt = f"""We have collected these symptoms:
+{symptoms_str}
 
+After multiple follow-up questions, our diagnostic confidence remains low at {confidence:.2f}.
+
+As a medical expert, please provide:
+1. A narrative paragraph explaining why these symptoms may not fit clearly into a known condition with high confidence
+2. A list of possible conditions these symptoms could indicate
+3. A clear recommendation to consult with a medical professional, including what type of specialist might be appropriate
+4. Any urgent warning signs the patient should watch for
+
+Format your response as natural language paragraphs, not as JSON.
+"""
+                resp = await self.llm_handler.execute_prompt(prompt, use_verifier_model=True)
+                explanation = resp.get("text", "")
+                
+                # Store the explanation in patient data
+                if "verification_info" not in patient_data:
+                    patient_data["verification_info"] = {}
+                patient_data["verification_info"]["low_confidence_explanation"] = explanation
+                
+                # Add a referral note to the patient data
+                patient_data["referral_needed"] = True
+                
+                return explanation
+                
+        except Exception as e:
+            logger.error(f"Error during verification process: {e}")
+            return f"An error occurred while analyzing your symptoms. Let's clarify: Do these symptoms accurately describe your condition: {symptoms_str}?"
+    
     async def suggest_mitigations(self, patient_data: Dict[str, Any]) -> str:
         """
         Suggest mitigations based on the (final) diagnosis

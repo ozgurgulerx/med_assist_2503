@@ -363,13 +363,36 @@ Provide a concise (2-3 sentence) summary of this user's context.
         assessment_notes = []
         if asked_questions:
             for q in asked_questions:
-                assessment_notes.append(f"• {q}")
+                if isinstance(q, dict):
+                    question_text = q.get("question", "Unknown question")
+                    answer_text = q.get("answer", "")
+                    if answer_text:
+                        assessment_notes.append(f"• Q: {question_text}\n  A: {answer_text}")
+                    else:
+                        assessment_notes.append(f"• Q: {question_text}")
+                else:
+                    assessment_notes.append(f"• {q}")
             assessment_text = "\n".join(assessment_notes)
         else:
             assessment_text = "Initial assessment in progress"
         
-        # Generate recommendations based on the diagnosis state
-        if diagnosis_name != "Pending diagnosis" and confidence >= 0.6:
+        # Check for verification information
+        verification_info = patient_data.get("verification_info", {})
+        verification_trigger = verification_info.get("trigger_reason", "none")
+        low_confidence_explanation = verification_info.get("low_confidence_explanation", "")
+        referral_needed = patient_data.get("referral_needed", False)
+        
+        # Generate recommendations based on the diagnosis state and verification
+        if verification_trigger == "low_confidence" and referral_needed:
+            recommendations = "MEDICAL REFERRAL RECOMMENDED\n\n"
+            if low_confidence_explanation:
+                recommendations += low_confidence_explanation
+            else:
+                recommendations += "Based on the assessment, your symptoms require further evaluation by a medical professional.\n"
+                recommendations += "• Please consult with a healthcare provider for a comprehensive evaluation\n"
+                recommendations += "• Your symptoms do not clearly match a single condition with high confidence\n"
+                recommendations += "• A medical professional can conduct additional tests and provide appropriate care"
+        elif diagnosis_name != "Pending diagnosis" and confidence >= 0.6:
             recommendations = "Based on the assessment, the following is recommended:\n"
             recommendations += "• Consult with a healthcare professional for confirmation\n"
             recommendations += "• Monitor symptoms and seek immediate care if condition worsens\n"
@@ -417,6 +440,7 @@ Provide a concise (2-3 sentence) summary of this user's context.
     Preliminary Diagnosis: {diagnosis_name}
     Diagnostic Confidence: {confidence_text}
     Assessment Basis: {confidence_reasoning}
+    Verification Status: {'Complete - High Confidence' if verification_trigger == 'high_confidence' else 'Complete - Low Confidence' if verification_trigger == 'low_confidence' else 'Pending'}
     
     ------------------------------------------
     RECOMMENDATIONS
@@ -428,12 +452,13 @@ Provide a concise (2-3 sentence) summary of this user's context.
     ------------------------------------------
     Analysis Protocol: {context_model}
     Diagnostic Protocol: {diagnosis_model}
-    Verification Status: {verification_model}
+    Verification Protocol: {verification_model}
     
-    DISCLAIMER: This is an automated preliminary assessment.
-    It is not a substitute for professional medical advice,
-    diagnosis, or treatment. Always seek the advice of your
-    physician or other qualified health provider.
+    IMPORTANT DISCLAIMER: This is a demonstration of AI capabilities for
+    medical assistant technology and is NOT actual medical advice.
+    This system is for research and development purposes only.
+    In a real scenario, always consult with qualified healthcare
+    professionals for any medical concerns or conditions.
     ==========================================
     """
         return diagnostic_info
@@ -668,7 +693,7 @@ async def interactive_conversation():
         except Exception as e:
             print(" " * 50, end="\r")
             error_msg = str(e)
-            print(f"\n❌ Error processing message: {error_msg}")
+            print(f"\n\u001b[31mError processing message: {error_msg}\u001b[0m")
             logger.error(f"Error processing message: {error_msg}")
             logger.error(traceback.format_exc())
             print("\nBot: I'm sorry, I encountered an error. Please check the logs for details or try again.")
