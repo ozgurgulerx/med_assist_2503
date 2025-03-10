@@ -7,6 +7,10 @@ import logging
 import sys
 from datetime import datetime
 from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables first before checking them
+load_dotenv()
 
 def setup_enhanced_logging(log_dir: Optional[str] = None, log_level: str = "DEBUG"):
     """
@@ -64,19 +68,6 @@ def log_system_info():
     # Log Python version
     logger.info(f"Python version: {sys.version}")
     
-    # Log environment variables (excluding sensitive ones)
-    env_vars = {k: v for k, v in os.environ.items() 
-                if not any(s in k.lower() for s in ['key', 'secret', 'password', 'token'])}
-    
-    logger.info("Environment variables:")
-    for key, value in env_vars.items():
-        if key.startswith('AZURE') or key.startswith('OPENAI') or key in ['DEBUG_MODE', 'RUN_MODE', 'HOST', 'PORT']:
-            # Redact actual values for API keys
-            if 'API_KEY' in key:
-                logger.info(f"  {key}: [REDACTED]")
-            else:
-                logger.info(f"  {key}: {value}")
-    
     # Check if key environment variables are set
     required_vars = ['AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_DEPLOYMENT_NAME']
     missing_vars = [var for var in required_vars if not os.environ.get(var)]
@@ -85,6 +76,14 @@ def log_system_info():
         logger.warning(f"Missing required environment variables: {', '.join(missing_vars)}")
     else:
         logger.info("All required environment variables are set")
+        
+        # Log sanitized info about key variables
+        logger.info(f"Azure OpenAI Endpoint: {os.environ.get('AZURE_OPENAI_ENDPOINT')}")
+        logger.info(f"Primary Deployment: {os.environ.get('AZURE_OPENAI_DEPLOYMENT_NAME')}")
+        logger.info(f"Mini Deployment: {os.environ.get('AZURE_OPENAI_MINI_DEPLOYMENT_NAME')}")
+        
+        if os.environ.get('AZURE_OPENAI_API_KEY'):
+            logger.info("API Key: [REDACTED]")
 
 if __name__ == "__main__":
     # Test the enhanced logging setup
