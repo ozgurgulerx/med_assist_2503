@@ -1,11 +1,8 @@
-"""
-LLM handler for medical assistant bot
-"""
 import os
 import json
 import re
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
@@ -18,22 +15,24 @@ from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_
 logger = logging.getLogger(__name__)
 
 class LLMHandler:
-    """Handles interactions with language models"""
-    
+    """
+    Handles interactions with language models.
+    """
+
     def __init__(self):
         """Initialize the LLM handler"""
         # Initialize Semantic Kernel
         self.kernel = Kernel()
-        
+
         # Configure execution settings
         self.execution_settings = AzureChatPromptExecutionSettings()
         self.execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
-        
-        # Initialize chat service
+
+        # Initialize chat services
         self.chat_service = None
         self.full_model_service = None
         self.setup_chat_services()
-        
+
     def setup_chat_services(self):
         """Set up Azure OpenAI chat services"""
         try:
@@ -44,9 +43,10 @@ class LLMHandler:
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            self.kernel.add_service(self.chat_service, service_id="mini")
-            logger.info(f"Added Azure OpenAI mini service with deployment: o3-mini")
-            
+            # Register as a named chat service
+            self.kernel.add_chat_service("mini", self.chat_service)
+            logger.info("Added Azure OpenAI mini service with deployment: gpt-4o")
+
             # Set up the full model service for critical operations
             self.full_model_service = AzureChatCompletion(
                 deployment_name="gpt-4o",
@@ -54,23 +54,24 @@ class LLMHandler:
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
                 api_version="2024-06-01"
             )
-            self.kernel.add_service(self.full_model_service, service_id="full")
-            logger.info(f"Added Azure OpenAI full service with deployment: o1")
-            
+            # Register as a named chat service
+            self.kernel.add_chat_service("full", self.full_model_service)
+            logger.info("Added Azure OpenAI full service with deployment: gpt-4o")
+
         except Exception as e:
             logger.error(f"Failed to initialize Azure OpenAI services: {str(e)}")
             logger.warning("The bot will continue with fallback responses instead of actual LLM calls")
             self.chat_service = None
             self.full_model_service = None
-    
+
     def is_available(self) -> bool:
         """Check if the LLM service is available"""
         return self.chat_service is not None
-    
+
     def is_full_model_available(self) -> bool:
         """Check if the full model service is available"""
         return self.full_model_service is not None
-    
+
     async def execute_prompt(self, prompt: str, use_full_model: bool = False, temperature: float = 0.7) -> Dict[str, Any]:
         """
         Execute a direct prompt to the LLM
@@ -84,44 +85,42 @@ class LLMHandler:
             Dictionary containing the response text and model info
         """
         # Select the appropriate service
-        service = self.full_model_service if use_full_model and self.is_full_model_available() else self.chat_service
-        
+        model_id = "full" if (use_full_model and self.is_full_model_available()) else "mini"
+
+        # Retrieve the chosen chat service from the kernel
+        service = self.kernel.get_chat_service(model_id)
         if not service:
             return {
                 "text": "LLM service not available.",
                 "model": "None",
                 "deployment": "None"
             }
-            
+
         try:
-            model_type = "full" if use_full_model else "mini"
-            deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o") if use_full_model else os.getenv("AZURE_OPENAI_MINI_DEPLOYMENT_NAME", "gpt-4o-mini")
-            
-            logger.info(f"Direct LLM prompt ({model_type}): {prompt[:100]}...")
-            
+            logger.info(f"Direct LLM prompt ({model_id}): {prompt[:100]}...")
             # Set temperature
             self.execution_settings.temperature = temperature
-            
+
             # Create a temp chat history for this prompt
             chat_history = ChatHistory()
             chat_history.add_user_message(prompt)
-            
+
             # Get LLM response
             result = await service.get_chat_message_content(
                 chat_history=chat_history,
                 settings=self.execution_settings,
                 kernel=self.kernel
             )
-            
+
             response_text = str(result)
-            logger.info(f"Direct LLM response ({model_type}): {response_text[:100]}...")
-            
+            logger.info(f"Direct LLM response ({model_id}): {response_text[:100]}...")
+
             return {
                 "text": response_text,
-                "model": model_type,
-                "deployment": deployment_name
+                "model": model_id,
+                "deployment": os.getenv("AZURE_OPENAI_ENDPOINT", "unknown")
             }
-            
+
         except Exception as e:
             logger.error(f"Error in direct LLM prompt: {str(e)}")
             return {
@@ -129,7 +128,7 @@ class LLMHandler:
                 "model": "error",
                 "deployment": "none"
             }
-    
+
     async def calculate_diagnosis_confidence(self, symptoms: str) -> Dict[str, Any]:
         """
         Calculate confidence in diagnosis through self-reflection
@@ -147,7 +146,7 @@ class LLMHandler:
                 "model": "none",
                 "deployment": "none"
             }
-        
+
         try:
             # Create a prompt for self-reflection
             prompt = f"""I need to assess my confidence in diagnosing a medical condition based on these symptoms:
@@ -170,10 +169,9 @@ Return ONLY a JSON object with this format:
   "reasoning": "Brief explanation of confidence level"
 }}"""
 
-            # Use full model for confidence calculation if available
             response_data = await self.execute_prompt(prompt, use_full_model=True, temperature=0.3)
             response_text = response_data.get("text", "")
-            
+
             # Try to find a JSON object in the response
             match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if match:
@@ -181,12 +179,11 @@ Return ONLY a JSON object with this format:
                     result = json.loads(match.group(0))
                     confidence = float(result.get("confidence", 0.0))
                     reasoning = result.get("reasoning", "No reasoning provided")
-                    
+
                     # Ensure confidence is between 0 and 1
                     confidence = max(0.0, min(confidence, 1.0))
-                    
                     logger.info(f"Diagnosis confidence: {confidence:.2f} - {reasoning}")
-                    
+
                     # Return confidence with model info
                     return {
                         "confidence": confidence,
@@ -194,24 +191,23 @@ Return ONLY a JSON object with this format:
                         "model": response_data.get("model", "unknown"),
                         "deployment": response_data.get("deployment", "unknown")
                     }
-                    
+
                 except (json.JSONDecodeError, ValueError) as e:
                     logger.error(f"Error parsing confidence result: {str(e)}")
-            
+
             # Fallback: estimate based on symptom count
             symptom_count = len(symptoms.split(','))
             fallback_confidence = min(0.3 + (symptom_count * 0.1), 0.7)
             fallback_reasoning = "Based on the number of symptoms provided"
-            
+
             logger.warning(f"Using fallback confidence: {fallback_confidence:.2f}")
-            
             return {
                 "confidence": fallback_confidence,
                 "reasoning": fallback_reasoning,
                 "model": response_data.get("model", "unknown"),
                 "deployment": response_data.get("deployment", "unknown")
             }
-            
+
         except Exception as e:
             logger.error(f"Error in confidence calculation: {str(e)}")
             return {
