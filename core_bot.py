@@ -433,47 +433,138 @@ async def process_message_api(message: str, user_id: str = None, include_diagnos
     
 
 async def interactive_conversation():
-    """Run an interactive conversation with the medical assistant bot"""
+    """Run an interactive conversation with the medical assistant bot with enhanced debugging"""
+    import os
+    import logging
+    import traceback
+    
+    logger = logging.getLogger(__name__)
+    
     # Check for environment variables
     if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
-        print("\nWARNING: Azure OpenAI environment variables not set.")
+        print("\n⚠️ WARNING: Azure OpenAI environment variables not set.")
         print("Using fallback responses instead of actual AI service.")
         print("\nTo use Azure OpenAI, please set:")
         print("  export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
         print("  export AZURE_OPENAI_API_KEY='your-api-key'")
-        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='o3'")
-        print("  export AZURE_OPENAI_MINI_DEPLOYMENT_NAME='o3-mini'")
+        print("  export AZURE_OPENAI_DEPLOYMENT_NAME='gpt-4o'")
+        print("  export AZURE_OPENAI_MINI_DEPLOYMENT_NAME='gpt-4o-mini'")
+    else:
+        print("\n✅ Azure OpenAI credentials detected.")
+        print(f"  Endpoint: {os.getenv('AZURE_OPENAI_ENDPOINT')}")
+        print(f"  Primary model: {os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o')}")
+        print(f"  Mini model: {os.getenv('AZURE_OPENAI_MINI_DEPLOYMENT_NAME', 'gpt-4o-mini')}")
     
+    print("\nInitializing bot...")
     bot = MedicalAssistantBot()
     user_id = "interactive_user"
     
+    # Diagnostic toggle
+    include_diagnostics = True
+    
     print("\n----- Starting Interactive Medical Assistant Conversation -----")
-    print("Type your messages and press Enter. Type 'exit', 'quit', or 'bye' to end the conversation.\n")
+    print("Type your messages and press Enter.")
+    print("Type 'exit', 'quit', or 'bye' to end the conversation.")
+    print("Type 'debug on/off' to toggle diagnostic information.")
+    print("Type 'help' for more commands.\n")
     
     # Initial greeting
     print("Bot: Hello! I'm your medical assistant. How can I help you today?")
     
     while True:
         # Get user input
-        user_input = input("\nYou: ").strip()
-        
-        # Check for exit commands
+        try:
+            user_input = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting conversation due to keyboard interrupt.")
+            break
+            
+        # Check for special commands
         if user_input.lower() in ["exit", "quit", "bye"]:
             print("\nBot: Thank you for talking with me. Take care!")
             break
+            
+        elif user_input.lower() == "help":
+            print("\n----- Commands -----")
+            print("exit, quit, bye - End the conversation")
+            print("debug on/off - Toggle diagnostic information")
+            print("clear - Clear the conversation history")
+            print("status - Check bot and connection status")
+            print("------------------")
+            continue
+            
+        elif user_input.lower() in ["debug on", "debug true"]:
+            include_diagnostics = True
+            print("\nDiagnostic information enabled.")
+            continue
+            
+        elif user_input.lower() in ["debug off", "debug false"]:
+            include_diagnostics = False
+            print("\nDiagnostic information disabled.")
+            continue
+            
+        elif user_input.lower() == "clear":
+            # Reset the user's conversation
+            if user_id in bot.chat_histories:
+                bot.chat_histories[user_id] = ChatHistory()
+                bot.user_data[user_id] = {}
+                print("\nConversation history cleared.")
+            continue
+            
+        elif user_input.lower() == "status":
+            llm_status = "Available" if bot.llm_handler.is_available() else "Unavailable"
+            full_model = "Available" if bot.llm_handler.is_full_model_available() else "Unavailable"
+            
+            print("\n----- Bot Status -----")
+            print(f"LLM Service: {llm_status}")
+            print(f"Full Model: {full_model}")
+            print(f"Dialog State: {bot.dialog_manager.get_user_state(user_id)}")
+            
+            # Show symptoms if any
+            if user_id in bot.user_data and "patient_data" in bot.user_data[user_id]:
+                symptoms = bot.user_data[user_id]["patient_data"].get("symptoms", [])
+                if symptoms:
+                    print(f"Recorded Symptoms: {', '.join(symptoms)}")
+                    
+                confidence = bot.user_data[user_id]["patient_data"].get("diagnosis_confidence", 0.0)
+                print(f"Diagnosis Confidence: {confidence:.2f}")
+            
+            print("---------------------")
+            continue
         
+        # Skip empty messages
+        if not user_input:
+            continue
+            
         try:
+            # Show processing indicator
+            print("Bot: Thinking...", end="\r")
+            
+            # Log the user input
+            logger.info(f"Processing user input: {user_input}")
+            
             # Process the message with diagnostic information
-            response = await bot.process_message(user_id, user_input, include_diagnostics=True)
+            response = await bot.process_message(user_id, user_input, include_diagnostics=include_diagnostics)
+            
+            # Clear the "thinking" indicator
+            print(" " * 50, end="\r")
+            
+            # Print the response
             print(f"\nBot: {response}")
                 
         except Exception as e:
-            print(f"\nError processing message: {str(e)}")
-            # Print more detailed error information
-            import traceback
-            print(traceback.format_exc())
-            print("\nBot: I'm sorry, I encountered an error. Please try again.")
-
+            # Clear the "thinking" indicator
+            print(" " * 50, end="\r")
+            
+            error_msg = str(e)
+            print(f"\n❌ Error processing message: {error_msg}")
+            
+            # Log the full error with traceback
+            logger.error(f"Error processing message: {error_msg}")
+            logger.error(traceback.format_exc())
+            
+            # Provide a helpful message to the user
+            print("\nBot: I'm sorry, I encountered an error. Please check the logs for details or try again.")
 # Entry point for running the bot directly
 if __name__ == "__main__":
     asyncio.run(interactive_conversation())
