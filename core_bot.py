@@ -163,10 +163,10 @@ class MedicalAssistantBot:
         logger.info(f"Executing action: {action_name}")
         
         if action_name == "utter_greet":
-            return "Hello! I'm your medical assistant. I'm here to help with your health questions."
+            return "Hello! I'm your medical assistant. I'm here to help with your health questions and medical symptoms. Let me know if there is anything I can help with."
         
         elif action_name == "utter_how_can_i_help":
-            return "How can I help you today?"
+            return "What medical concerns or symptoms would you like to discuss today?"
         
         elif action_name == "action_handle_out_of_scope":
             # Get the original message for context
@@ -684,7 +684,7 @@ async def interactive_conversation():
     print("Type 'debug on/off' to toggle diagnostic information.")
     print("Type 'help' for more commands.\n")
     
-    print("Bot: Hello! I'm your medical assistant. How can I help you today?")
+    print("Bot: Hello! I'm your medical assistant. I'm here to help with your health questions and medical symptoms. Let me know if there is anything I can help with.")
     
     while True:
         try:
