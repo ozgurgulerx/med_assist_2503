@@ -514,3 +514,120 @@ Respond with a JSON object:
         except Exception as e:
             logger.error(f"Error in emergency detection: {str(e)}")
             return {"is_emergency": False}
+
+    async def generate_diagnosis(self, patient_data: Dict[str, Any]) -> str:
+        """
+        Generate a diagnosis based on the patient's symptoms.
+        
+        This method analyzes the patient's symptoms and generates a diagnosis with confidence score.
+        It also generates differential diagnoses and stores them in the patient data.
+        
+        Args:
+            patient_data: The patient data including symptoms
+            
+        Returns:
+            A string describing the diagnosis and recommendations
+        """
+        symptoms_str = self.get_symptoms_text(patient_data)
+        if not symptoms_str or symptoms_str == "unknown symptoms":
+            return "I need more information about your symptoms to provide a diagnosis."
+        
+        logger.info(f"Generating diagnosis for symptoms: '{symptoms_str}'")
+        
+        # Ensure diagnosis structure exists
+        if "diagnosis" not in patient_data:
+            patient_data["diagnosis"] = {"name": None, "confidence": 0.0}
+        
+        # Get current confidence score
+        confidence = patient_data["diagnosis"].get("confidence", 0.0)
+        
+        if not self.llm_handler.is_available():
+            # Fallback if LLM is not available
+            return ("Based on the information provided, I cannot make a specific diagnosis. "
+                   "Please consult with a healthcare professional for proper evaluation.")
+        
+        # Use LLM to generate diagnosis
+        prompt = f"""Analyze these symptoms and provide a diagnosis with confidence level and differential diagnoses:
+
+Symptoms: {symptoms_str}
+
+Respond with a JSON object:
+{{
+"most_probable_diagnosis": "name of the most likely diagnosis",
+"confidence": 0.7,
+"reasoning": "brief explanation of why this diagnosis is likely",
+"differential_diagnoses": [
+  {{
+    "name": "alternative diagnosis 1",
+    "confidence": 0.4,
+    "key_indicators": "symptoms that suggest this diagnosis"
+  }},
+  // Add 2-3 more alternatives
+]
+}}
+"""
+        
+        try:
+            response_data = await self.llm_handler.execute_prompt(prompt, use_full_model=True, temperature=0.3)
+            response_text = response_data.get("text", "")
+            
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    result = json.loads(json_match.group(0))
+                    
+                    # Extract the most probable diagnosis
+                    most_probable_diagnosis = result.get("most_probable_diagnosis", "Uncertain diagnosis")
+                    confidence_value = float(result.get("confidence", 0.5))
+                    confidence_value = max(0.0, min(1.0, confidence_value))  # Ensure it's between 0 and 1
+                    reasoning = result.get("reasoning", "Insufficient information for detailed reasoning")
+                    
+                    # Update the diagnosis in patient data
+                    patient_data["diagnosis"] = {
+                        "name": most_probable_diagnosis,
+                        "confidence": confidence_value
+                    }
+                    
+                    # Store reasoning
+                    patient_data["confidence_reasoning"] = reasoning
+                    
+                    # Store differential diagnoses
+                    differential_diagnoses = result.get("differential_diagnoses", [])
+                    patient_data["differential_diagnoses"] = differential_diagnoses
+                    
+                    # Log the diagnosis information including the most probable diagnosis
+                    logger.info(f"Generated diagnosis: {most_probable_diagnosis} with confidence {confidence_value:.2f}")
+                    logger.info(f"Diagnosis confidence is for: {most_probable_diagnosis}")
+                    
+                    # Generate a response based on confidence level
+                    if confidence_value >= 0.7:
+                        response = f"Based on your symptoms, you may have {most_probable_diagnosis} (confidence: {confidence_value:.2f})."
+                    elif confidence_value >= 0.4:
+                        response = f"Your symptoms suggest a possible {most_probable_diagnosis}, but with moderate confidence ({confidence_value:.2f})."
+                    else:
+                        response = f"Your symptoms don't clearly point to a specific diagnosis (confidence: {confidence_value:.2f})."
+                    
+                    return response
+                    
+                except Exception as e:
+                    logger.error(f"Error parsing diagnosis JSON: {e}")
+                    # If we fail to parse the JSON but have a diagnosis name from before, keep it
+                    if patient_data["diagnosis"].get("name") is None:
+                        patient_data["diagnosis"]["name"] = "Uncertain diagnosis"
+                    logger.info(f"Diagnosis confidence is for: {patient_data['diagnosis'].get('name', 'Uncertain diagnosis')}")
+                    return f"I'm having trouble analyzing your symptoms."
+            
+            logger.warning("Failed to parse diagnosis response")
+            # If we fail to get a proper response but have a confidence score, make sure we have a diagnosis name
+            if patient_data["diagnosis"].get("name") is None:
+                patient_data["diagnosis"]["name"] = "Uncertain diagnosis"
+            logger.info(f"Diagnosis confidence is for: {patient_data['diagnosis'].get('name', 'Uncertain diagnosis')}")
+            return f"Based on the information provided, I cannot make a specific diagnosis with confidence."
+            
+        except Exception as e:
+            logger.error(f"Error in diagnosis generation: {str(e)}")
+            # If we encounter an error but have a confidence score, make sure we have a diagnosis name
+            if patient_data["diagnosis"].get("name") is None:
+                patient_data["diagnosis"]["name"] = "Uncertain diagnosis"
+            logger.info(f"Diagnosis confidence is for: {patient_data['diagnosis'].get('name', 'Uncertain diagnosis')}")
+            return f"I encountered an error while analyzing your symptoms."
