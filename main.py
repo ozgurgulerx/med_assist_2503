@@ -97,11 +97,14 @@ async def chat(request: ChatRequest):
         # Get the bot instance for this user
         bot = get_bot_instance(user_id)
         
+        # Always include diagnostics if requested
+        include_diagnostics = request.include_diagnostics
+        
         # Process the message using the persistent bot instance
         response = await bot.process_message(
             user_id,
             request.message,
-            include_diagnostics=request.include_diagnostics
+            include_diagnostics=include_diagnostics
         )
         
         logger.info(f"Generated response for user {user_id}: {response[:100]}...")
@@ -138,31 +141,66 @@ def run_api():
 
 async def run_interactive_with_recovery():
     """Run the interactive mode with error recovery"""
+    print("\nMedical Assistant Bot Interactive Mode")
+    print("Type 'exit' to quit, 'debug on/off' to toggle diagnostic info, 'reset' to start over\n")
+    
+    bot = MedicalAssistantBot()
+    user_id = "interactive_user"
+    include_diagnostics = False
+    
     while True:
         try:
-            logger.info("Starting interactive conversation mode")
-            await interactive_conversation()
-            # If we reach here, the conversation ended normally
-            break
+            # Get user input
+            user_input = input("\nYou: ")
+            
+            # Check for special commands
+            if user_input.lower() == 'exit':
+                print("\nGoodbye!")
+                break
+            elif user_input.lower() == 'reset':
+                print("\nResetting conversation...")
+                # Create a new bot instance
+                bot = MedicalAssistantBot()
+                continue
+            elif user_input.lower() == 'debug on':
+                include_diagnostics = True
+                print("\nDebug mode enabled. Diagnostic information will be shown.")
+                continue
+            elif user_input.lower() == 'debug off':
+                include_diagnostics = False
+                print("\nDebug mode disabled. Diagnostic information will be hidden.")
+                continue
+            
+            # Process the message
+            response = await bot.process_message(user_id, user_input, include_diagnostics=include_diagnostics)
+            
+            # Display the response
+            if include_diagnostics and "MEDICAL ASSESSMENT REPORT" in response:
+                # Split the response into user-facing content and debug information
+                parts = response.split("==========================================\n", 1)
+                if len(parts) > 1:
+                    user_response = parts[0].strip()
+                    debug_info = "==========================================\n" + parts[1]
+                    
+                    # Print the user-facing response
+                    print(f"\nAssistant: {user_response}")
+                    
+                    # Print the debug information in a different color
+                    print("\n\033[33m--- DEBUG INFORMATION ---\033[0m")
+                    print(f"\033[33m{debug_info}\033[0m")
+                else:
+                    print(f"\nAssistant: {response}")
+            else:
+                print(f"\nAssistant: {response}")
+                
         except KeyboardInterrupt:
-            logger.info("User interrupted the conversation. Exiting.")
+            print("\n\nExiting due to keyboard interrupt...")
             break
         except Exception as e:
             error_details = traceback.format_exc()
-            logger.error(f"Error in interactive conversation: {str(e)}\n{error_details}")
-            print("\n\nAn error occurred in the conversation. See logs for details.")
-            print(f"Error: {str(e)}")
-            
-            # Ask if the user wants to restart
-            try:
-                response = input("\nDo you want to restart the conversation? (y/n): ").strip().lower()
-                if response != 'y':
-                    print("Exiting.")
-                    break
-                print("\nRestarting conversation...\n")
-            except KeyboardInterrupt:
-                print("\nExiting.")
-                break
+            logger.error(f"Error in interactive mode: {str(e)}\n{error_details}")
+            print(f"\nAn error occurred: {str(e)}")
+            print("The bot will attempt to continue with the conversation.")
 
 if __name__ == "__main__":
     # Log startup information

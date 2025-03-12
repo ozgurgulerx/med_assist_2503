@@ -361,7 +361,7 @@ Give helpful, accurate information while emphasizing this is general advice and 
 
     def _generate_diagnostic_info(self, user_id: str, patient_data: Dict[str, Any], intent: str, user_context: Dict[str, Any], model_info: Dict[str, str]) -> str:
         """
-        Generate a formatted diagnostic information block.
+        Generate a formatted diagnostic information block with enhanced debug information.
         
         Args:
             user_id: The user's identifier
@@ -384,8 +384,8 @@ Give helpful, accurate information while emphasizing this is general advice and 
         patient_name = demographics.get("name", "[Patient Name]")
         patient_age = demographics.get("age", "[Age]")
         patient_gender = demographics.get("gender", "[Gender]")
-        patient_height = demographics.get("height", "[Height]")
-        patient_weight = demographics.get("weight", "[Weight]")
+        patient_height = demographics.get("height", 0.0)
+        patient_weight = demographics.get("weight", 0.0)
         
         # Handle symptoms display - support both string and dict formats
         symptom_objs = patient_data.get("symptoms", [])
@@ -411,12 +411,30 @@ Give helpful, accurate information while emphasizing this is general advice and 
         confidence = diagnosis_info.get("confidence", 0.0)
         confidence_text = f"{confidence:.2f} ({confidence * 100:.1f}%)"
         
+        # Get potential alternative diagnoses
+        differential_diagnoses = patient_data.get("differential_diagnoses", [])
+        differential_text = ""
+        if differential_diagnoses:
+            diff_items = []
+            for diag in differential_diagnoses:
+                if isinstance(diag, dict):
+                    name = diag.get("name", "Unknown")
+                    conf = diag.get("confidence", 0.0)
+                    diff_items.append(f"• {name}: {conf:.2f} ({conf * 100:.1f}%)")
+                else:
+                    diff_items.append(f"• {diag}")
+            differential_text = "\n".join(diff_items)
+        else:
+            differential_text = "No alternative diagnoses identified"
+        
         # Additional reasoning or placeholders
         confidence_reasoning = patient_data.get("confidence_reasoning", "Assessment pending")
         
         # Get additional medical information
         asked_questions = patient_data.get("asked_questions", [])
         followup_count = len(asked_questions)
+        symptom_related_questions = len([q for q in asked_questions if isinstance(q, dict) and q.get("is_symptom_related", False)])
+        answered_questions = len([q for q in asked_questions if isinstance(q, dict) and q.get("is_answered", False)])
         
         # Format the questions as a medical assessment
         assessment_notes = []
@@ -425,10 +443,15 @@ Give helpful, accurate information while emphasizing this is general advice and 
                 if isinstance(q, dict):
                     question_text = q.get("question", "Unknown question")
                     answer_text = q.get("answer", "")
+                    is_symptom_related = q.get("is_symptom_related", False)
+                    is_answered = q.get("is_answered", False)
+                    status = "[Answered]" if is_answered else "[Pending]"
+                    type_tag = "[Symptom]" if is_symptom_related else "[General]"
+                    
                     if answer_text:
-                        assessment_notes.append(f"• Q: {question_text}\n  A: {answer_text}")
+                        assessment_notes.append(f"• Q: {question_text}\n  A: {answer_text} {status} {type_tag}")
                     else:
-                        assessment_notes.append(f"• Q: {question_text}")
+                        assessment_notes.append(f"• Q: {question_text} {status} {type_tag}")
                 else:
                     assessment_notes.append(f"• {q}")
             assessment_text = "\n".join(assessment_notes)
@@ -464,6 +487,33 @@ Give helpful, accurate information while emphasizing this is general advice and 
         response_model = f"{model_info.get('model', 'standard')}/{model_info.get('deployment', 'primary')}"
         diagnosis_model = patient_data.get("diagnosis_model", "Standard diagnostic protocol")
         verification_model = patient_data.get("verification_model", "Pending verification")
+        
+        # Parse intent information
+        intent_parts = intent.split(" (confidence: ")
+        intent_name = intent_parts[0]
+        intent_confidence = intent_parts[1].rstrip(")") if len(intent_parts) > 1 else "unknown"
+        
+        # Format the debug information section
+        debug_info = f"""
+    ------------------------------------------
+    DEBUG INFORMATION
+    ------------------------------------------
+    Intent Classification: {intent_name} (confidence: {intent_confidence})
+    Current Dialogue State: {current_state}
+    OpenAI Model Used: {response_model}
+    
+    Question Statistics:
+    • Total Questions Asked: {followup_count}
+    • Symptom-Related Questions: {symptom_related_questions}
+    • Answered Questions: {answered_questions}
+    
+    Diagnosis Information:
+    • Primary Diagnosis: {diagnosis_name} (confidence: {confidence_text})
+    • Verification Trigger: {verification_trigger}
+    
+    Differential Diagnoses:
+    {differential_text}
+    """
         
         # Format the report with medical styling
         diagnostic_info = f"""
@@ -505,7 +555,7 @@ Give helpful, accurate information while emphasizing this is general advice and 
     RECOMMENDATIONS
     ------------------------------------------
     {recommendations}
-    
+    {debug_info}
     ------------------------------------------
     TECHNICAL APPENDIX
     ------------------------------------------
