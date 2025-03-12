@@ -612,6 +612,19 @@ Give helpful, accurate information while emphasizing this is general advice and 
         logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
         logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
         
+        # Check if this is a greeting that should trigger a session reset
+        if top_intent == "greeting" and self.dialog_manager.get_user_state(user_id) in ["farewell", "generating_diagnosis"]:
+            logger.info(f"Detected greeting after conversation completion, resetting session for user {user_id}")
+            self.reset_session(user_id)
+            # Since we've reset the session, update our local references
+            history = self.get_chat_history(user_id)
+            user_data = self.get_user_data(user_id)
+            patient_data = initialize_patient_data_if_needed(user_data)
+
+        # Special handling for greeting and smallTalk intents - don't process as symptoms
+        if top_intent in ["greeting", "smallTalk"]:
+            logger.info(f"{top_intent} detected, skipping symptom processing")
+        
         # Handle symptom clarification responses
         if top_intent == "symptomClarification":
             asked_questions = patient_data.get("asked_questions", [])
@@ -780,44 +793,6 @@ Give helpful, accurate information while emphasizing this is general advice and 
             for msg in history.messages:
                 role = "User" if msg.role.lower() == "user" else "Assistant"
                 history_text += f"{role}: {msg.content}\n"
-                    # Determine next state based on current state and intent
-                    next_state = self.dialog_manager.advance_dialog_state(user_id, top_intent)
-                    
-                    # Get the next actions to execute
-                    next_actions = self.dialog_manager.get_next_actions(next_state)
-                    
-                    # Execute actions and collect responses
-                    responses = []
-                    for action in next_actions:
-                        response = await self.execute_action(action, user_id, message)
-                        responses.append(response)
-                    
-                    # Update user state
-                    self.dialog_manager.set_user_state(user_id, next_state)
-                    
-                    # Combine responses
-                    full_response = " ".join(responses)
-                    
-                    # Add assistant response to history
-                    history.add_assistant_message(full_response)
-                    
-                    # For greetings and small talk, we don't need diagnostic information
-                    if include_diagnostics:
-                        # Provide minimal diagnostic info without symptoms or diagnosis
-                        minimal_diagnostic_info = f"""
-                ==========================================
-                MEDICAL ASSESSMENT REPORT
-                ==========================================
-                No medical assessment needed for greeting/casual conversation.
-                
-                ------------------------------------------
-                DEBUG INFORMATION
-                ------------------------------------------
-                Intent Classification: {top_intent} (confidence: {top_score:.2f})
-                Current Dialogue State: {next_state}
-                """
-                        return full_response + "\n\n" + minimal_diagnostic_info
-                    return full_response
             # Create a prompt for context generation
             prompt = f"""Based on the following conversation history, create a brief summary of the user's context, 
 including key health concerns, symptoms mentioned, and relevant details.
