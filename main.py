@@ -97,8 +97,8 @@ async def chat(request: ChatRequest):
         # Get the bot instance for this user
         bot = get_bot_instance(user_id)
         
-        # Always include diagnostics if requested
-        include_diagnostics = request.include_diagnostics
+        # Always include diagnostics for demonstration purposes unless explicitly disabled
+        include_diagnostics = True if request.include_diagnostics is None else request.include_diagnostics
         
         # Process the message using the persistent bot instance
         response = await bot.process_message(
@@ -143,10 +143,11 @@ async def run_interactive_with_recovery():
     """Run the interactive mode with error recovery"""
     print("\nMedical Assistant Bot Interactive Mode")
     print("Type 'exit' to quit, 'debug on/off' to toggle diagnostic info, 'reset' to start over\n")
+    print("\033[33mDebug mode is enabled by default for demonstration purposes\033[0m")
     
     bot = MedicalAssistantBot()
     user_id = "interactive_user"
-    include_diagnostics = False
+    include_diagnostics = True  # Set to True by default for demonstration
     
     while True:
         try:
