@@ -407,8 +407,15 @@ Give helpful, accurate information while emphasizing this is general advice and 
         
         # Get diagnosis information
         diagnosis_info = patient_data.get("diagnosis", {})
-        diagnosis_name = diagnosis_info.get("name", "Pending diagnosis")
+        diagnosis_name = diagnosis_info.get("name")
         confidence = diagnosis_info.get("confidence", 0.0)
+        
+        # Always show confidence for possible diagnoses during assessment
+        if diagnosis_name is None or diagnosis_name.lower() == "none":
+            # If no specific diagnosis yet, show "Possible causes" instead
+            diagnosis_name = "Possible causes being evaluated"
+            
+        # Always show the confidence value - it represents assessment progress
         confidence_text = f"{confidence:.2f} ({confidence * 100:.1f}%)"
         
         # Get potential alternative diagnoses
@@ -418,10 +425,15 @@ Give helpful, accurate information while emphasizing this is general advice and 
             diff_items = []
             for diag in differential_diagnoses:
                 if isinstance(diag, dict):
-                    name = diag.get("name", "Unknown")
+                    name = diag.get("name")
                     conf = diag.get("confidence", 0.0)
+                    
+                    # Handle None or empty diagnosis names meaningfully
+                    if name is None or name.lower() == "none":
+                        continue  # Skip items with no diagnosis
+                    
                     diff_items.append(f"• {name}: {conf:.2f} ({conf * 100:.1f}%)")
-                else:
+                elif diag and str(diag).lower() != "none":
                     diff_items.append(f"• {diag}")
             differential_text = "\n".join(diff_items)
         else:
