@@ -67,7 +67,11 @@ class DialogManager:
                 "next_actions": ["action_provide_diagnosis", "utter_suggest_mitigations"],
                 "transitions": {
                     "medicalInquiry": "providing_info",
+                    "smallTalk": "providing_info",
+                    "greeting": "greeting",
+                    "symptomReporting": "collecting_symptoms",
                     "confirm": "farewell",
+                    "deny": "farewell",
                     "endConversation": "farewell",
                     "out_of_scope": "out_of_scope_handler",
                     "emergency": "emergency"

@@ -145,6 +145,31 @@ class MedicalAssistantBot:
         """Get model usage for a user."""
         return self.model_usage.get(user_id, {"model": "unknown", "deployment": "unknown"})
     
+    def reset_session(self, user_id: str) -> None:
+        """
+        Reset a user's session completely, clearing all data and history.
+        This should be called when a new conversation begins after a farewell or diagnosis.
+        
+        Args:
+            user_id: The user's identifier
+        """
+        logger.info(f"Resetting session for user {user_id}")
+        
+        # Reset user state in dialog manager
+        self.dialog_manager.reset_user_state(user_id)
+        
+        # Clear chat history
+        if user_id in self.chat_histories:
+            self.chat_histories[user_id] = ChatHistory()
+        
+        # Clear user data
+        if user_id in self.user_data:
+            # Initialize a fresh patient data structure
+            self.user_data[user_id] = {}
+            initialize_patient_data_if_needed(self.user_data[user_id])
+        
+        logger.info(f"Session reset complete for user {user_id}")
+    
     async def execute_action(self, action_name: str, user_id: str, user_message: str = "") -> str:
         """
         Execute a dialog action and return the response.
@@ -633,6 +658,15 @@ Give helpful, accurate information while emphasizing this is general advice and 
             user_data = self.get_user_data(user_id)
             patient_data = initialize_patient_data_if_needed(user_data)
 
+        # Check if we're seeing new symptoms after a completed diagnosis
+        if top_intent == "symptomReporting" and self.dialog_manager.get_user_state(user_id) in ["generating_diagnosis", "farewell"]:
+            logger.info(f"Detected new symptoms after previous diagnosis, resetting session for user {user_id}")
+            self.reset_session(user_id)
+            # Since we've reset the session, update our local references
+            history = self.get_chat_history(user_id)
+            user_data = self.get_user_data(user_id)
+            patient_data = initialize_patient_data_if_needed(user_data)
+
         # Special handling for greeting and smallTalk intents - don't process as symptoms
         if top_intent in ["greeting", "smallTalk"]:
             logger.info(f"{top_intent} detected, skipping symptom processing")
@@ -746,20 +780,43 @@ Give helpful, accurate information while emphasizing this is general advice and 
                 if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
                     logger.info("Confidence threshold reached, transitioning to verification")
         
-        # Determine next state based on current state and intent
-        next_state = self.dialog_manager.advance_dialog_state(user_id, top_intent)
-        
-        # Get the next actions to execute
-        next_actions = self.dialog_manager.get_next_actions(next_state)
-        
-        # Execute actions and collect responses
-        responses = []
-        for action in next_actions:
-            response = await self.execute_action(action, user_id, message)
-            responses.append(response)
-        
-        # Update user state
-        self.dialog_manager.set_user_state(user_id, next_state)
+        # Check if we need to immediately generate a diagnosis report based on O1 verification
+        if patient_data.get("ready_for_report", False) and patient_data.get("verification_complete", False):
+            logger.info("O1 model verified diagnosis with high confidence, generating medical report")
+            # Force transition to diagnosis generation state
+            next_state = "generating_diagnosis"
+            # Clear the flags to prevent repeated generation
+            patient_data["ready_for_report"] = False
+            patient_data["verification_complete"] = False
+            
+            # Generate the diagnosis and mitigations
+            diagnosis_response = await self.diagnostic_engine.generate_diagnosis(patient_data)
+            mitigations_response = await self.diagnostic_engine.suggest_mitigations(patient_data)
+            
+            # Combine responses
+            responses = [diagnosis_response, mitigations_response]
+            
+            # Add a message asking if there's anything else the user needs help with
+            responses.append("Is there anything else I can help you with today?")
+            
+            # Update user state to generating_diagnosis
+            self.dialog_manager.set_user_state(user_id, next_state)
+        else:
+            # Standard dialog flow handling
+            # Determine next state based on current state and intent
+            next_state = self.dialog_manager.advance_dialog_state(user_id, top_intent)
+            
+            # Get the next actions to execute
+            next_actions = self.dialog_manager.get_next_actions(next_state)
+            
+            # Execute actions and collect responses
+            responses = []
+            for action in next_actions:
+                response = await self.execute_action(action, user_id, message)
+                responses.append(response)
+            
+            # Update user state
+            self.dialog_manager.set_user_state(user_id, next_state)
         
         # Combine responses
         full_response = " ".join(responses)

@@ -352,8 +352,12 @@ and "notes" for extra detail.
                         # We keep confidence as is
                         patient_data["diagnosis"] = diagnosis_data
                         
+                        # Mark this for immediate report generation
+                        patient_data["ready_for_report"] = True
+                        patient_data["verification_complete"] = True
+                        
                         # Return a direct statement that the diagnosis is confirmed
-                        return f"I've confirmed your symptoms likely represent: {diag_name}. We will proceed with that assessment."
+                        return f"I've confirmed your symptoms likely represent: {diag_name}. Based on this assessment, I'll provide you with a medical report."
                     else:
                         # Verifier disagrees -> we ask more
                         return f"The verifier model suggests we need more information. Please clarify any missing or incorrect symptom details."
