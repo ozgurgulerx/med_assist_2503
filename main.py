@@ -107,8 +107,22 @@ async def chat(request: ChatRequest):
             include_diagnostics=include_diagnostics
         )
         
-        logger.info(f"Generated response for user {user_id}: {response[:100]}...")
-        return {"response": response, "user_id": user_id}
+        # Split the response into user-facing content and debug information
+        user_response = response
+        debug_info = ""
+        
+        if include_diagnostics and "MEDICAL ASSESSMENT REPORT" in response:
+            parts = response.split("==========================================\n", 1)
+            if len(parts) > 1:
+                user_response = parts[0].strip()
+                debug_info = "==========================================\n" + parts[1]
+        
+        logger.info(f"Generated response for user {user_id}: {user_response[:100]}...")
+        return {
+            "response": user_response,
+            "debug_info": debug_info,
+            "user_id": user_id
+        }
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"Chatbot processing error for user {user_id}: {str(e)}\n{error_details}")
