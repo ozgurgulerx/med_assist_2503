@@ -499,7 +499,7 @@ Give helpful, accurate information while emphasizing this is general advice and 
     Preliminary Diagnosis: {diagnosis_name}
     Diagnostic Confidence: {confidence_text}
     Assessment Basis: {confidence_reasoning}
-    Verification Status: {'Complete - High Confidence' if verification_trigger == 'high_confidence' else 'Complete - Low Confidence' if verification_trigger == 'low_confidence' else 'Pending'}
+    Verification Status: {'Complete - High Confidence' if verification_trigger == 'high_confidence' else 'Complete - Low Confidence' if verification_trigger == 'low_confidence' else 'Complete - Max Questions' if verification_trigger == 'max_questions' else 'Pending'}
     
     ------------------------------------------
     RECOMMENDATIONS
@@ -562,8 +562,37 @@ Give helpful, accurate information while emphasizing this is general advice and 
         logger.info(f"Current state: {self.dialog_manager.get_user_state(user_id)}")
         logger.info(f"Classified intent: {top_intent} (score: {top_score:.2f})")
         
+        # Handle symptom clarification responses
+        if top_intent == "symptomClarification":
+            asked_questions = patient_data.get("asked_questions", [])
+            if asked_questions:
+                # Get the most recent question
+                last_question = asked_questions[-1]
+                if isinstance(last_question, dict) and not last_question.get("is_answered", False):
+                    # Mark the question as answered
+                    last_question["answer"] = message
+                    last_question["timestamp_answered"] = current_utc_timestamp()
+                    last_question["is_answered"] = True
+                    last_question["is_symptom_related"] = True  # Ensure it's marked as symptom-related
+                    logger.info(f"Marked question '{last_question['question']}' as answered with symptom clarification")
+                    
+                    # Add the response as a symptom if it's not already in the symptoms list
+                    # This ensures we capture the symptom information from clarification responses
+                    if message.lower().strip() not in [s.lower() for s in patient_data.get("symptoms", [])]:
+                        symptom_text = f"{last_question['question']}: {message}"
+                        logger.info(f"Adding symptom clarification: '{symptom_text}' to patient data")
+                        self.diagnostic_engine.add_symptom(patient_data, symptom_text)
+                    
+                    # Update diagnosis confidence after getting clarification
+                    await self.diagnostic_engine.update_diagnosis_confidence(patient_data)
+                    logger.info(f"Diagnosis confidence updated to: {patient_data.get('diagnosis', {}).get('confidence', 0.0)}")
+                    
+                    # Check if we should transition to verification
+                    if self.dialog_manager.should_verify_symptoms(user_id, patient_data):
+                        logger.info("Confidence threshold reached after symptom clarification, transitioning to verification")
+        
         # If the message is out-of-scope, mark the most recent question as not symptom-related
-        if top_intent == "out_of_scope":
+        elif top_intent == "out_of_scope":
             asked_questions = patient_data.get("asked_questions", [])
             if asked_questions:
                 # Get the most recent question

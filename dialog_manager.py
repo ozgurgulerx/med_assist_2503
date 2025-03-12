@@ -236,26 +236,33 @@ class DialogManager:
                                      and q.get("is_answered", True)]
         symptom_question_count = len(answered_symptom_questions)
         
+        # Count total number of questions asked (to prevent infinite loops)
+        total_questions_asked = len([q for q in asked_questions if isinstance(q, dict)])
+        
         logger.info(f"Found {symptom_question_count} answered symptom-related questions out of {len(asked_questions)} total questions")
 
-        # Trigger verification in two cases:
+        # Trigger verification in three cases:
         # 1. If confidence is >= 0.85 (high confidence case)
         # 2. If we've asked at least 4 symptom-related follow-up questions and confidence is still below 0.85 (low confidence case)
+        # 3. If we've asked at least 8 total questions, regardless of whether they're symptom-related (to prevent infinite loops)
         high_confidence_case = (len(symptoms) >= 1 and confidence >= 0.85)
         low_confidence_case = (len(symptoms) >= 1 and symptom_question_count >= 4 and confidence < 0.85)
+        max_questions_case = (len(symptoms) >= 1 and total_questions_asked >= 8)
         
-        should_verify = high_confidence_case or low_confidence_case
+        should_verify = high_confidence_case or low_confidence_case or max_questions_case
 
         if should_verify:
+            trigger_reason = "high_confidence" if high_confidence_case else "low_confidence" if low_confidence_case else "max_questions"
             logger.info(
                 f"Transitioning to verification for user {user_id} "
                 f"(confidence: {confidence:.2f}, symptom questions: {symptom_question_count}, "
-                f"high_confidence_trigger: {high_confidence_case}, low_confidence_trigger: {low_confidence_case})"
+                f"total questions: {total_questions_asked}, "
+                f"trigger_reason: {trigger_reason})"
             )
             # Store the verification trigger reason in patient data
             if "verification_info" not in patient_data:
                 patient_data["verification_info"] = {}
-            patient_data["verification_info"]["trigger_reason"] = "high_confidence" if high_confidence_case else "low_confidence"
+            patient_data["verification_info"]["trigger_reason"] = trigger_reason
             self.set_user_state(user_id, "verification")
 
         return should_verify

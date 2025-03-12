@@ -407,7 +407,7 @@ Respond with a JSON object:
             logger.error(f"Error analyzing implied symptoms: {str(e)}")
             return None
     
-    async def classify_with_dialogue_context(self, utterance: str, user_id: str) -> Optional[Dict[str, float]]:
+    async def classify_with_dialogue_context(self, utterance: str, user_id: str) -> Dict[str, float]:
         """
         Classify intent with full dialogue context awareness.
         
@@ -418,107 +418,49 @@ Respond with a JSON object:
         Returns:
             Dictionary of intent names and confidence scores.
         """
-        # Ensure LLM services are initialized
-        await self._ensure_initialized()
-        
-        if not hasattr(self, 'chat_service') or self.chat_service is None:
-            return {}
-        
-        # Get dialogue context
+        # Get dialogue state and previous question
         dialogue_state = self.dialogue_tracker.get_state(user_id)
-        expected_response = self.dialogue_tracker.get_expected_response(user_id)
-        conversation_history = self.get_formatted_history(user_id)
         previous_question = self.get_previous_question(user_id)
+        expected_response = self.dialogue_tracker.get_expected_response(user_id)
         
-        # Create a contextual prompt with updated categories
-        prompt = f"""You are a medical assistant analyzing patient intent with full dialogue context.
-
-CONVERSATION HISTORY:
-{conversation_history}
-
-DIALOGUE CONTEXT:
-- Current dialogue state: {dialogue_state}
-- Expected response type: {expected_response or "None"}
-- Previous assistant question: "{previous_question}"
-
-CURRENT USER MESSAGE: "{utterance}"
-
-Given this full context, classify the user's intent into one of these categories:
-
-- greeting
-- symptomReporting
-- symptomClarification
-- medicalInquiry
-- checkDiagnosis
-- demographicInfo
-- smallTalk
-- out_of_scope
-- urgentEmergency
-- endConversation
-- verification
-
-Respond with a JSON object:
-{{
-  "intent": "the_intent_name",
-  "confidence": 0.9,
-  "reasoning": "Brief explanation with reference to dialogue context"
-}}"""
-
-        try:
-            # Create a temporary chat history
-            chat_history = ChatHistory()
-            chat_history.add_user_message(prompt)
+        # Initialize scores
+        scores = {intent: 0.1 for intent in self.intent_options}
+        
+        # Check for direct answers to previous questions
+        if previous_question and dialogue_state in ["collecting_symptoms", "asking_followup", "verification"]:
+            # Simple affirmative/negative responses in medical context
+            affirmative_responses = ["yes", "yeah", "yep", "sure", "correct", "right", "true", "exactly"]
+            negative_responses = ["no", "nope", "not really", "not at all", "false", "incorrect", "nothing like that"]
             
-            # Configure execution settings
-            execution_settings = AzureChatPromptExecutionSettings()
-            execution_settings.temperature = 0.2
+            normalized_utterance = utterance.lower().strip()
             
-            # Get LLM response
-            result = await self.chat_service.get_chat_message_content(
-                chat_history=chat_history,
-                settings=execution_settings,
-                kernel=self.kernel
-            )
+            # Check if this is a direct answer to a symptom question
+            if any(resp in normalized_utterance for resp in affirmative_responses + negative_responses):
+                # This is likely a symptom clarification
+                scores["symptomClarification"] = 0.85
+                return scores
             
-            response_text = str(result)
-            
-            # Parse the JSON response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                try:
-                    parsed_result = json.loads(json_str)
-                    
-                    # Extract intent and confidence
-                    intent = parsed_result.get("intent", "").lower()
-                    confidence = float(parsed_result.get("confidence", 0.5))
-                    reasoning = parsed_result.get("reasoning", "No reasoning provided")
-                    
-                    # Validate intent
-                    if intent not in self.intent_options:
-                        logger.warning(f"LLM returned invalid intent: {intent}")
-                        return None
-                    
-                    # Validate confidence
-                    confidence = max(0.0, min(1.0, confidence))
-                    
-                    # Create score dictionary
-                    scores = {i: 0.1 for i in self.intent_options}
-                    scores[intent] = confidence
-                    
-                    logger.info(f"Dialogue context classification: {intent} ({confidence:.2f}) - {reasoning}")
-                    return scores
-                    
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON from dialogue context classification: {e}")
-                    return None
-            else:
-                logger.warning("No JSON found in dialogue context classification response")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error in dialogue context classification: {str(e)}")
-            return None
+        # Handle state-specific classification
+        if dialogue_state == "collecting_symptoms":
+            # Bias toward symptom reporting in this state
+            scores["symptomReporting"] = 0.4
+            scores["symptomClarification"] = 0.3
+        elif dialogue_state == "verification":
+            # Bias toward verification responses
+            scores["verification"] = 0.4
+            scores["symptomClarification"] = 0.3
+        elif dialogue_state == "greeting":
+            # Bias toward symptom reporting after greeting
+            scores["symptomReporting"] = 0.3
+            scores["medicalInquiry"] = 0.3
+        
+        # Adjust based on expected response type
+        if expected_response == "yes_no" and any(resp in utterance.lower() for resp in ["yes", "no", "yeah", "nope"]):
+            scores["symptomClarification"] = 0.8
+        elif expected_response == "symptom_details":
+            scores["symptomReporting"] = 0.7
+        
+        return scores
     
     async def classify_with_medical_knowledge(self, utterance: str) -> Optional[Dict[str, float]]:
         """
@@ -833,7 +775,7 @@ Respond with a JSON object:
             return result
         
         # First, check if this is an out-of-scope message
-        out_of_scope_confidence = self.detect_out_of_scope(utterance)
+        out_of_scope_confidence = self.detect_out_of_scope(utterance, user_id)
         if out_of_scope_confidence > 0.7:  # High confidence threshold for out-of-scope
             logger.info(f"Detected out-of-scope message with confidence {out_of_scope_confidence:.2f}: '{utterance}'")
             result = {"out_of_scope": out_of_scope_confidence}
@@ -898,19 +840,35 @@ Respond with a JSON object:
         
         return result
     
-    def detect_out_of_scope(self, utterance: str) -> float:
+    def detect_out_of_scope(self, utterance: str, user_id: str = "default_user") -> float:
         """
         Detect if a message is out of scope for a medical assistant by comparing with examples
-        and checking for non-medical content.
+        and checking for non-medical content. Takes conversation context into account.
         
         Args:
             utterance: The user's message
+            user_id: The user's identifier for context checking
             
         Returns:
             Confidence score for out-of-scope detection (0.0-1.0)
         """
         # Normalize the utterance
         normalized_utterance = utterance.lower().strip()
+        
+        # Check if this is a valid response to a previous medical question
+        previous_question = self.get_previous_question(user_id)
+        if previous_question:
+            # Simple affirmative/negative responses are valid in medical context
+            simple_responses = [
+                "yes", "yeah", "yep", "sure", "correct", "right", "true", "exactly",
+                "no", "nope", "not really", "not at all", "false", "incorrect", "nothing like that",
+                "sometimes", "occasionally", "rarely", "often", "frequently",
+                "a little", "somewhat", "slightly", "moderately", "very", "extremely"
+            ]
+            
+            # Check if the utterance contains any simple valid response
+            if any(resp in normalized_utterance for resp in simple_responses):
+                return 0.1  # Very low confidence that this is out-of-scope
         
         # Direct match with examples (high confidence)
         for example in self.out_of_scope_examples:
