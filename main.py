@@ -116,6 +116,8 @@ async def chat(request: ChatRequest):
             if len(parts) > 1:
                 user_response = parts[0].strip()
                 debug_info = "==========================================\n" + parts[1]
+            else:
+                debug_info = "Debug information formatting issue"
         
         logger.info(f"Generated response for user {user_id}: {user_response[:100]}...")
         return {
