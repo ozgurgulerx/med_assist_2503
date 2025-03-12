@@ -140,12 +140,41 @@ async def list_users():
 
 @app.delete("/users/{user_id}")
 async def reset_user(user_id: str):
-    """Reset a user's conversation"""
+    """Reset a user's conversation and clear all associated state"""
     if user_id in bot_instances:
+        # Get the bot instance to reset its internal state before deleting
+        if hasattr(bot_instances[user_id], 'dialog_manager'):
+            bot_instances[user_id].dialog_manager.reset_user_state(user_id)
+            
+        # Also clear any state in the intent classifier
+        if hasattr(bot_instances[user_id], 'intent_classifier'):
+            if hasattr(bot_instances[user_id].intent_classifier, 'dialogue_tracker'):
+                if user_id in bot_instances[user_id].intent_classifier.dialogue_tracker.user_states:
+                    del bot_instances[user_id].intent_classifier.dialogue_tracker.user_states[user_id]
+            if hasattr(bot_instances[user_id].intent_classifier, 'conversation_histories'):
+                if user_id in bot_instances[user_id].intent_classifier.conversation_histories:
+                    del bot_instances[user_id].intent_classifier.conversation_histories[user_id]
+        
+        # Finally delete the bot instance
         del bot_instances[user_id]
-        logger.info(f"Reset conversation for user: {user_id}")
-        return {"status": "success", "message": f"User {user_id} conversation reset"}
+        logger.info(f"Reset conversation and all state for user: {user_id}")
+        return {"status": "success", "message": f"User {user_id} conversation and state completely reset"}
     return {"status": "not_found", "message": "User not found"}
+
+@app.post("/generate_user_id")
+async def generate_user_id():
+    """Generate a unique user ID for a new session"""
+    # Generate a unique ID using a timestamp and random string
+    import time
+    import random
+    import string
+    
+    timestamp = int(time.time())
+    random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    user_id = f"user_{timestamp}_{random_string}"
+    
+    logger.info(f"Generated new user ID: {user_id}")
+    return {"user_id": user_id}
 
 def run_api():
     """Run the API server"""
