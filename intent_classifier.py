@@ -535,7 +535,13 @@ Respond with a JSON object:
                     reasoning = parsed_result.get("reasoning", "No reasoning provided")
                     
                     # Validate intent
-                    if intent not in self.intent_options:
+                    valid_intent = None
+                    for valid_option in self.intent_options:
+                        if valid_option.lower() == intent:
+                            valid_intent = valid_option
+                            break
+                            
+                    if not valid_intent:
                         logger.warning(f"LLM returned invalid intent: {intent}")
                         return None
                     
@@ -544,9 +550,9 @@ Respond with a JSON object:
                     
                     # Create score dictionary
                     scores = {i: 0.1 for i in self.intent_options}
-                    scores[intent] = confidence
+                    scores[valid_intent] = confidence
                     
-                    logger.info(f"Medical knowledge classification: {intent} ({confidence:.2f}) - {reasoning}")
+                    logger.info(f"Medical knowledge classification: {valid_intent} ({confidence:.2f}) - {reasoning}")
                     return scores
                     
                 except json.JSONDecodeError as e:
