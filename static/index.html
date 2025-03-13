@@ -94,6 +94,22 @@
         .checkbox-container input {
             margin-right: 5px;
         }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-healthy {
+            background-color: #4CAF50; /* Green */
+        }
+        .status-warning {
+            background-color: #FF9800; /* Orange */
+        }
+        .status-error {
+            background-color: #F44336; /* Red */
+        }
     </style>
 </head>
 <body>
@@ -118,6 +134,7 @@
         </div>
         
         <div class="status" id="statusDisplay">
+            Connection: <span id="connectionStatus"><span class="status-indicator"></span>Checking...</span> | 
             User ID: <span id="userIdDisplay">Not connected</span>
         </div>
     </div>
@@ -134,6 +151,8 @@
         const newSessionBtn = document.getElementById('newSessionBtn');
         const userIdDisplay = document.getElementById('userIdDisplay');
         const debugModeCheckbox = document.getElementById('debugMode');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const statusIndicator = connectionStatus.querySelector('.status-indicator');
         
         // Initialize user ID from localStorage or generate a new one
         let userId = localStorage.getItem('medAssistUserId');
@@ -221,6 +240,17 @@
             // Clear the input field
             messageInput.value = '';
             
+            // Create an AbortController for timeout handling
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
+            
+            // Add a temporary "thinking" message
+            const tempMessageElement = document.createElement('div');
+            tempMessageElement.className = 'bot-message';
+            tempMessageElement.textContent = 'Thinking...';
+            messageContainer.appendChild(tempMessageElement);
+            messageContainer.scrollTop = messageContainer.scrollHeight;
+            
             try {
                 const response = await fetch(`${API_BASE_URL}/chat`, {
                     method: 'POST',
@@ -231,19 +261,50 @@
                         message: message,
                         user_id: userId,
                         include_diagnostics: debugModeCheckbox.checked
-                    })
+                    }),
+                    signal: controller.signal
                 });
                 
+                // Clear the timeout
+                clearTimeout(timeoutId);
+                
+                // Remove the temporary message
+                messageContainer.removeChild(tempMessageElement);
+                
                 if (!response.ok) {
-                    throw new Error('Failed to send message');
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || `Server error: ${response.status}`);
                 }
                 
                 const data = await response.json();
-                addBotMessage(data.response, data.debug_info);
+                
+                // Check if the response contains a connection error
+                if (data.error_type === 'connection') {
+                    addBotMessage("I'm sorry, I'm having trouble connecting to my knowledge base. Please try again in a moment.");
+                } else if (data.error_type === 'configuration') {
+                    addBotMessage("Sorry, there's a configuration issue with my knowledge base. Please contact support.");
+                } else {
+                    addBotMessage(data.response, data.debug_info);
+                }
                 
             } catch (error) {
+                // Clear the timeout
+                clearTimeout(timeoutId);
+                
+                // Remove the temporary message
+                if (tempMessageElement.parentNode === messageContainer) {
+                    messageContainer.removeChild(tempMessageElement);
+                }
+                
                 console.error('Error sending message:', error);
-                addBotMessage('Sorry, there was an error processing your message. Please try again.');
+                
+                if (error.name === 'AbortError') {
+                    addBotMessage('I\'m sorry, the request timed out. The server might be busy. Please try again in a moment.');
+                } else if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    addBotMessage('I\'m having trouble connecting to the server. Please check your internet connection and try again.');
+                } else {
+                    addBotMessage('Sorry, there was an error processing your message. Please try again.');
+                }
             }
         }
         
@@ -290,6 +351,36 @@
             await generateNewUserId();
         }
         
+        // Function to check API health
+        async function checkApiHealth() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/health`);
+                if (!response.ok) {
+                    updateConnectionStatus('error', 'Connection error');
+                    return;
+                }
+                
+                const data = await response.json();
+                if (data.connection === 'healthy') {
+                    updateConnectionStatus('healthy', 'Connected');
+                } else if (data.connection === 'misconfigured') {
+                    updateConnectionStatus('warning', 'Configuration issue');
+                } else {
+                    updateConnectionStatus('error', 'Connection issue');
+                }
+            } catch (error) {
+                console.error('Health check failed:', error);
+                updateConnectionStatus('error', 'Unreachable');
+            }
+        }
+        
+        // Function to update the connection status display
+        function updateConnectionStatus(status, text) {
+            statusIndicator.className = 'status-indicator';
+            statusIndicator.classList.add(`status-${status}`);
+            connectionStatus.innerHTML = `<span class="status-indicator status-${status}"></span>${text}`;
+        }
+        
         // Event listeners
         sendBtn.addEventListener('click', () => {
             sendMessage(messageInput.value);
@@ -313,6 +404,10 @@
         
         // Initialize the chat when the page loads
         initializeChat();
+        
+        // Check health on startup and periodically
+        checkApiHealth();
+        setInterval(checkApiHealth, 30000); // Check every 30 seconds
     </script>
 </body>
 </html>

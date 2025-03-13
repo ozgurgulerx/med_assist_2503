@@ -83,6 +83,51 @@ async def root():
         "active_users": len(bot_instances)
     }
 
+@app.get("/health")
+async def health_check():
+    """Extended health check that tests Azure OpenAI connection"""
+    logger.info("Health check endpoint accessed with connection testing.")
+    
+    # Create a new bot instance or use an existing one
+    test_user_id = "health_check_user"
+    try:
+        if test_user_id not in bot_instances:
+            bot_instances[test_user_id] = MedicalAssistantBot()
+        bot = bot_instances[test_user_id]
+        
+        # Attempt a simple API call to test the connection
+        llm_handler = bot.llm_handler
+        connection_status = "healthy"
+        error_message = None
+        
+        # Try to check if credentials are valid
+        if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
+            connection_status = "misconfigured"
+            error_message = "Azure OpenAI credentials not properly configured"
+        
+        return {
+            "status": "online",
+            "connection": connection_status,
+            "error": error_message,
+            "models": {
+                "primary": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
+                "mini": os.getenv("AZURE_OPENAI_MINI_DEPLOYMENT_NAME", "gpt-4o-mini")
+            },
+            "active_users": len(bot_instances)
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return {
+            "status": "online",
+            "connection": "error",
+            "error": str(e),
+            "models": {
+                "primary": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o"),
+                "mini": os.getenv("AZURE_OPENAI_MINI_DEPLOYMENT_NAME", "gpt-4o-mini")
+            },
+            "active_users": len(bot_instances)
+        }
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     """Process a message and return the bot's response with optional diagnostic information"""
@@ -110,8 +155,13 @@ async def chat(request: ChatRequest):
         # Split the response into user-facing content and debug information
         user_response = response
         debug_info = ""
+        error_type = None
         
-        if include_diagnostics and "MEDICAL ASSESSMENT REPORT" in response:
+        # Check if this is an error response with a specific error_type
+        if isinstance(response, dict) and "error_type" in response:
+            error_type = response.get("error_type")
+            user_response = response.get("text", "An error occurred")
+        elif include_diagnostics and "MEDICAL ASSESSMENT REPORT" in response:
             parts = response.split("==========================================\n", 1)
             if len(parts) > 1:
                 user_response = parts[0].strip()
@@ -123,12 +173,28 @@ async def chat(request: ChatRequest):
         return {
             "response": user_response,
             "debug_info": debug_info,
-            "user_id": user_id
+            "user_id": user_id,
+            "error_type": error_type
         }
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"Chatbot processing error for user {user_id}: {str(e)}\n{error_details}")
-        raise HTTPException(status_code=500, detail=f"Chatbot error: {str(e)}")
+        
+        # Determine error type for frontend handling
+        error_message = str(e).lower()
+        error_type = "unknown"
+        
+        if any(term in error_message for term in ["connection", "timeout", "network", "connect", "unreachable"]):
+            error_type = "connection"
+        elif "credential" in error_message or "key" in error_message or "endpoint" in error_message:
+            error_type = "configuration"
+            
+        return {
+            "response": f"I'm having trouble processing your request: {str(e)}",
+            "debug_info": error_details,
+            "user_id": user_id,
+            "error_type": error_type
+        }
 
 @app.get("/users")
 async def list_users():

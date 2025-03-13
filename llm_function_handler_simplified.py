@@ -142,7 +142,8 @@ class LLMFunctionHandler:
             logger.error(f"Error registering medical functions: {str(e)}")
     
     async def generate_diagnosis(self, symptoms: str, service_id: str = "full") -> Dict[str, Any]:
-        """Generate a diagnosis based on symptoms.
+        """
+        Generate a diagnosis based on symptoms.
         
         Args:
             symptoms: Patient symptoms as a string
@@ -152,6 +153,16 @@ class LLMFunctionHandler:
             Dictionary with diagnosis information
         """
         try:
+            # Verify API key and endpoint are set
+            if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
+                logger.error("Azure OpenAI credentials not properly configured")
+                return {
+                    "text": "I'm having trouble connecting to my knowledge base due to missing credentials. Please check your environment configuration.",
+                    "error_type": "configuration",
+                    "model": "error",
+                    "service_id": service_id
+                }
+                
             kernel_args = KernelArguments(symptoms=symptoms)
             kernel_args.set_ai_service(service_id)
             
@@ -169,12 +180,24 @@ class LLMFunctionHandler:
                 "service_id": service_id
             }
         except Exception as e:
-            logger.error(f"Error in diagnosis generation: {str(e)}")
-            return {
-                "text": f"Error in diagnosis generation: {str(e)}",
-                "model": "error",
-                "service_id": service_id
-            }
+            error_message = str(e).lower()
+            # Differentiate between connection errors and other errors
+            if any(term in error_message for term in ["connection", "timeout", "network", "connect", "unreachable", "server", "request"]):
+                logger.error(f"Azure OpenAI connection error: {str(e)}")
+                return {
+                    "text": "I'm having trouble connecting to my knowledge base. Please try again in a moment.",
+                    "error_type": "connection",
+                    "model": "error",
+                    "service_id": service_id
+                }
+            else:
+                logger.error(f"Error in diagnosis generation: {str(e)}")
+                return {
+                    "text": f"An unexpected error occurred: {str(e)}",
+                    "error_type": "processing",
+                    "model": "error",
+                    "service_id": service_id
+                }
     
     async def generate_followup_question(self, symptoms: str, asked_questions: str, service_id: str = "mini") -> Dict[str, Any]:
         """Generate a follow-up question to gather more information.
@@ -188,10 +211,17 @@ class LLMFunctionHandler:
             Dictionary with follow-up question
         """
         try:
-            kernel_args = KernelArguments(
-                symptoms=symptoms, 
-                asked_questions=asked_questions
-            )
+            # Verify API key and endpoint are set
+            if not os.getenv("AZURE_OPENAI_ENDPOINT") or not os.getenv("AZURE_OPENAI_API_KEY"):
+                logger.error("Azure OpenAI credentials not properly configured")
+                return {
+                    "text": "I'm having trouble connecting to my knowledge base due to missing credentials.",
+                    "error_type": "configuration",
+                    "model": "error",
+                    "service_id": service_id
+                }
+                
+            kernel_args = KernelArguments(symptoms=symptoms, asked_questions=asked_questions)
             kernel_args.set_ai_service(service_id)
             
             result = await self.kernel.invoke_async(
@@ -199,8 +229,8 @@ class LLMFunctionHandler:
                 arguments=kernel_args
             )
             
-            response_text = str(result).strip('"').strip()
-            logger.info(f"Follow-up question response ({service_id}): {response_text}")
+            response_text = str(result)
+            logger.info(f"Follow-up question response ({service_id}): {response_text[:100]}...")
             
             return {
                 "text": response_text,
@@ -208,12 +238,24 @@ class LLMFunctionHandler:
                 "service_id": service_id
             }
         except Exception as e:
-            logger.error(f"Error in follow-up question generation: {str(e)}")
-            return {
-                "text": f"Error in follow-up question generation: {str(e)}",
-                "model": "error",
-                "service_id": service_id
-            }
+            error_message = str(e).lower()
+            # Differentiate between connection errors and other errors
+            if any(term in error_message for term in ["connection", "timeout", "network", "connect", "unreachable", "server", "request"]):
+                logger.error(f"Azure OpenAI connection error: {str(e)}")
+                return {
+                    "text": "I'm having trouble connecting to my knowledge base. Please try again in a moment.",
+                    "error_type": "connection",
+                    "model": "error", 
+                    "service_id": service_id
+                }
+            else:
+                logger.error(f"Error generating follow-up question: {str(e)}")
+                return {
+                    "text": "Can you tell me more about your symptoms?",
+                    "error_type": "processing",
+                    "model": "error",
+                    "service_id": service_id
+                }
     
     async def verify_high_confidence_diagnosis(self, symptoms: str, diagnosis: str, confidence: str, service_id: str = "verifier") -> Dict[str, Any]:
         """Verify a high-confidence diagnosis.
