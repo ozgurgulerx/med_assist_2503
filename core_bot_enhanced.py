@@ -162,10 +162,10 @@ class MedicalAssistantBot:
         logger.info(f"Executing action: {action_name}")
         
         if action_name == "utter_greet":
-            return "Hello! I'm your medical assistant. I'm here to help with your health questions and medical symptoms. Let me know if there is anything I can help with."
+            return "Hello! I'm your friendly medical assistant. I'm here to help you with any health concerns you might be experiencing. How are you feeling today?"
         
         elif action_name == "utter_how_can_i_help":
-            return "What medical concerns or symptoms would you like to discuss today?"
+            return "Have you been experiencing any specific symptoms or health concerns that I can assist you with? Please feel free to share as much or as little as you're comfortable with."
         
         elif action_name == "action_handle_out_of_scope":
             # Get the original message for context
